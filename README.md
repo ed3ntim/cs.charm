@@ -7,7 +7,9 @@ in the game. Charms can be placed interactively on a weapon, attached via
 Parent or Child Of and optionally swing with rigid body physics.
 Target: Blender 5.2, compatible back to 4.5.
 
-**[Download cs_charm.zip (latest release)](https://github.com/ed3ntim/cs.charm/releases/latest/download/cs_charm.zip)**
+**For plugin excluding the charm assets (CS2 export required) [⬇ Download cs_charm.zip (latest release)](https://github.com/ed3ntim/cs.charm/releases/latest/download/cs_charm.zip)**
+
+**For the version including all charm assets visit my page [⬇ Download cs_charm-1.2.0 - all charms.zip](https://ed3n.gallery/apps/cs-charm/)**
 
 ## Installation
 
