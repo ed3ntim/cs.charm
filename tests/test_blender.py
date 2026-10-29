@@ -33,6 +33,11 @@ def _clear_scene():
         bpy.ops.rigidbody.world_remove()
 
 
+def _lifted(obj, point, normal):
+    """Charm origin for a surface point: lifted by the model's back depth."""
+    return Vector(point) + Vector(normal) * P.back_depth(obj) * obj.cs_charm.scale
+
+
 def _cube(name="Target", size=1.0, location=(0, 0, 0)):
     mesh = bpy.data.meshes.new(name)
     half = size / 2
@@ -146,9 +151,16 @@ class SpawnTest(CharmTestCase):
         self.assertEqual(main.node_tree.name, groups.LIQUID_GROUP)
         self.assertAlmostEqual(main.inputs["Liquid Hue Shift"].default_value, 39.504, places=3)
         self.assertAlmostEqual(main.inputs["Fill Level"].default_value, 0.57075, places=4)
-        bottom, top = main.inputs["Bottom"].default_value, main.inputs["Top"].default_value
-        self.assertLess(bottom, top)
-        self.assertAlmostEqual(top - bottom, 0.026, delta=0.002)
+        # No CS2 level values: the level spans the container's bounding box.
+        upright = main.inputs["Level Upright"].default_value
+        self.assertAlmostEqual(upright[0], -upright[2], places=6)
+        self.assertAlmostEqual(upright[2] - upright[0], 0.026, delta=0.002)
+        self.assertLess(main.inputs["Liquid Center"].default_value[2], 0.0)
+        if hasattr(flask_mat, "surface_render_method"):
+            self.assertEqual(flask_mat.surface_render_method, "DITHERED")
+        # The level follows world up: the group reads it through a vector transform.
+        vt = [n for n in main.node_tree.nodes if n.bl_idname == "ShaderNodeVectorTransform"]
+        self.assertEqual([(n.convert_from, n.convert_to) for n in vt], [("WORLD", "OBJECT")])
         self.assertTrue(main.inputs["Color Alpha"].is_linked)
         self.assertEqual(flask_mat.node_tree.nodes["TEX_COLOR"].image.alpha_mode, "CHANNEL_PACKED")
         obj.cs_charm.pattern = 345  # same fill level every 1000 patterns
@@ -203,6 +215,104 @@ class PlacementTest(CharmTestCase):
         self.assertAlmostEqual((down.normalized() - Vector((1, 0, 0))).length, 0.0, places=6)
         self.assertAlmostEqual(down.length, 2.0, places=6)
 
+    def test_orientation_rest_on_top(self):
+        m = P.orientation_matrix(Vector(), Vector((0, 0, 1)), "HANG", rest_dir=Vector((1, 0, 0)))
+        r = m.to_3x3()
+        # Face up, lying toward the rest direction.
+        self.assertAlmostEqual((r @ Vector((1, 0, 0)) - Vector((0, 0, 1))).length, 0.0, places=6)
+        self.assertAlmostEqual((r @ Vector((0, 0, -1)) - Vector((1, 0, 0))).length, 0.0, places=6)
+        # Rotation turns it around the normal.
+        r = P.orientation_matrix(Vector(), Vector((0, 0, 1)), "HANG", math.radians(90),
+                                 rest_dir=Vector((1, 0, 0))).to_3x3()
+        self.assertAlmostEqual((r @ Vector((0, 0, -1)) - Vector((0, 1, 0))).length, 0.0, places=6)
+
+    def test_orientation_rest_on_slope_and_wall_continuity(self):
+        n = Vector((0, -0.5, 0.866)).normalized()
+        down = P.orientation_matrix(Vector(), n, "HANG", rest_dir=Vector((1, 0, 0))).to_3x3() @ Vector((0, 0, -1))
+        self.assertAlmostEqual(down.dot(n), 0.0, places=6)  # lies on the slope
+        self.assertLess(down.z, -0.4)                        # pointing downhill
+        self.assertLess(down.y, -0.7)
+        wall = P.orientation_matrix(Vector(), Vector((0, -1, 0)), "HANG").to_3x3()
+        steep = P.orientation_matrix(Vector(), Vector((0, -1, 0.06)).normalized(), "HANG").to_3x3()
+        for axis in (Vector((1, 0, 0)), Vector((0, 0, 1))):
+            self.assertLess((wall @ axis - steep @ axis).length, 0.1)
+
+    def _world_coords(self, obj):
+        bpy.context.view_layer.update()
+        return [obj.matrix_world @ v.co for v in obj.data.vertices]
+
+    def _tol(self, obj):
+        # The rest solver allows a contact tolerance of a fraction of the size.
+        return 0.005 * obj.cs_charm.base_height * obj.cs_charm.scale
+
+    def test_no_clipping_on_top_and_side(self):
+        target = _cube(size=1.0)
+        self.settings.attach = "PARENT"
+        top = self.spawn(self.gem)
+        P.place(top, Vector((0.2, 0, 0.5)), Vector((0, 0, 1)), self.settings, target)
+        self.assertGreaterEqual(min(c.z for c in self._world_coords(top)), 0.5 - self._tol(top))
+        # On a flat top it lies flat, toward the target's center.
+        down = top.matrix_world.to_3x3() @ Vector((0, 0, -1))
+        self.assertLess(down.x, -0.9)
+        self.assertAlmostEqual(down.z, 0.0, delta=0.08)
+        side = self.spawn(self.gem)
+        P.place(side, Vector((0, -0.5, 0)), Vector((0, -1, 0)), self.settings, target)
+        self.assertLessEqual(max(c.y for c in self._world_coords(side)), -0.5 + self._tol(side))
+        # Free to hang: straight down as before.
+        down = side.matrix_world.to_3x3() @ Vector((0, 0, -1))
+        self.assertLess((down.normalized() - Vector((0, 0, -1))).length, 0.05)
+
+    def test_rests_on_sphere(self):
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=0.05, segments=48, ring_count=24, location=(0, 0, 0))
+        sphere = bpy.context.active_object
+        self.settings.attach = "PARENT"
+        obj = self.spawn(self.gem)
+        P.place(obj, Vector((0, 0, 0.05)), Vector((0, 0, 1)), self.settings, sphere)
+        coords = self._world_coords(obj)
+        self.assertGreaterEqual(min(c.length for c in coords), 0.05 - self._tol(obj) - 0.0005)
+        # It follows the curvature down instead of sticking out flat: this
+        # 3 cm charm touches a 5 cm sphere about 9 degrees below horizontal.
+        down = obj.matrix_world.to_3x3() @ Vector((0, 0, -1))
+        self.assertLess(down.normalized().z, -0.12)
+
+    def test_hangs_over_edge(self):
+        target = _cube(size=1.0)
+        self.settings.attach = "PARENT"
+        obj = self.spawn(self.gem)
+        scale = obj.cs_charm.scale
+        P.place(obj, Vector((0.5 - 0.002 * scale, 0, 0.5)), Vector((0, 0, 1)), self.settings, target)
+        # It tips over the edge (about 45 degrees: the rigid charm's back
+        # rests on the edge, it cannot hang straight down from a pivot on top).
+        down = obj.matrix_world.to_3x3() @ Vector((0, 0, -1))
+        self.assertLess(down.normalized().z, -0.5)
+        self.assertGreater(down.x, 0.5)
+        coords = [c for c in self._world_coords(obj) if c.x < 0.5]
+        self.assertGreaterEqual(min(c.z for c in coords), 0.5 - self._tol(obj))
+
+    def test_rest_off_uses_normal_only(self):
+        target = _cube(size=1.0)
+        self.settings.attach = "PARENT"
+        self.settings.rest_on_surface = False
+        obj = self.spawn(self.gem)
+        P.place(obj, Vector((0.2, 0, 0.5)), Vector((0, 0, 1)), self.settings, target)
+        self.assertEqual(obj.cs_charm.rest_key, "")
+        self.assertFalse(obj.cs_charm.rest_on_surface)
+
+    def test_operators_act_on_active_only(self):
+        a, b = self.spawn(self.gem, 5), self.spawn(self.gem, 6)
+        for o in (a, b):
+            P.place(o, Vector(), Vector((0, -1, 0)), self.settings)
+            o.select_set(True)
+        bpy.context.view_layer.objects.active = b
+        bpy.ops.cs_charm.randomize_pattern()
+        self.assertEqual(a.cs_charm.pattern, 5)
+        bpy.ops.cs_charm.add_physics()
+        self.assertFalse(a.cs_charm.physics)
+        self.assertTrue(b.cs_charm.physics)
+        bpy.ops.cs_charm.delete()
+        self.assertIn(a, list(bpy.data.objects))
+        self.assertNotIn("b", [o.name for o in bpy.data.objects if o == a])
+
     def test_spawn_on_selected_parent(self):
         target = _cube(location=(0, 0, 0))
         bpy.context.view_layer.objects.active = target
@@ -215,7 +325,7 @@ class PlacementTest(CharmTestCase):
         self.assertEqual(obj.parent, target)
         self.assertEqual(obj.cs_charm.target, target)
         loc = obj.matrix_world.translation.copy()
-        self.assertAlmostEqual(loc.y, -0.5, places=4)  # on the -Y face
+        self.assertAlmostEqual(loc.y, _lifted(obj, (0, -0.5, 0), (0, -1, 0)).y, places=4)  # on the -Y face
         # Moving the target moves the charm.
         target.location.x += 2.0
         bpy.context.view_layer.update()
@@ -229,14 +339,15 @@ class PlacementTest(CharmTestCase):
         bpy.context.view_layer.update()
         self.assertIsNone(obj.parent)
         self.assertEqual(obj.constraints[0].type, "CHILD_OF")
-        self.assertAlmostEqual((obj.matrix_world.translation - Vector((0, -0.5, 0))).length, 0.0, places=4)
+        self.assertAlmostEqual((obj.matrix_world.translation - _lifted(obj, (0, -0.5, 0), (0, -1, 0))).length, 0.0,
+                               places=4)
         target.location.z = 1.0
         bpy.context.view_layer.update()
         self.assertAlmostEqual(obj.matrix_world.translation.z, 1.0, places=4)
         # Editing the placement keeps the charm on the (moved) target.
         obj.cs_charm.offset = 100.0
         bpy.context.view_layer.update()
-        expected = Vector((0, -0.5 - obj.cs_charm.base_height, 1.0))
+        expected = _lifted(obj, (0, -0.5 - obj.cs_charm.base_height, 1.0), (0, -1, 0))
         self.assertAlmostEqual((obj.matrix_world.translation - expected).length, 0.0, places=4)
         obj.cs_charm.rotation = math.radians(90)
         obj.cs_charm.scale = 2.0
@@ -258,7 +369,8 @@ class PlacementTest(CharmTestCase):
         self.assertEqual(bpy.ops.cs_charm.spawn_at_cursor(), {"FINISHED"})
         obj = bpy.context.active_object
         self.assertEqual(obj.cs_charm.attach, "NONE")
-        self.assertAlmostEqual((obj.matrix_world.translation - Vector((1, 1, 1))).length, 0.0, places=5)
+        self.assertAlmostEqual((obj.matrix_world.translation - _lifted(obj, (1, 1, 1), (0, -1, 0))).length, 0.0,
+                               places=5)
 
     def test_attach_detach_operators(self):
         target = _cube()
@@ -275,7 +387,8 @@ class PlacementTest(CharmTestCase):
         self.assertEqual(bpy.ops.cs_charm.detach(), {"FINISHED"})
         self.assertEqual(obj.cs_charm.attach, "NONE")
         self.assertEqual(len(obj.constraints), 0)
-        self.assertAlmostEqual((obj.matrix_world.translation - Vector((0, -0.5, 0))).length, 0.0, places=4)
+        self.assertAlmostEqual((obj.matrix_world.translation - _lifted(obj, (0, -0.5, 0), (0, -1, 0))).length, 0.0,
+                               places=4)
 
 
 class PhysicsTest(CharmTestCase):
@@ -323,6 +436,144 @@ class PhysicsTest(CharmTestCase):
         physics.delete_charm(bpy.context, obj)
         for name in helpers:
             self.assertNotIn(name, bpy.data.objects)
+
+
+    def test_collides_with_animated_target(self):
+        scene = bpy.context.scene
+        target = _cube(size=1.0)
+        self.settings.attach = "PARENT"
+        obj = self.spawn(self.gem)
+        P.place(obj, Vector((0.2, 0, 0.5)), Vector((0, 0, 1)), self.settings, target)
+        physics.add_physics(bpy.context, obj)
+        collider = obj.cs_charm.physics_collider
+        self.assertIsNotNone(collider)
+        self.assertEqual(collider.parent, target)
+        self.assertEqual(collider.data, target.data)
+        self.assertEqual(collider.rigid_body.collision_shape, "MESH")
+        self.assertTrue(collider.rigid_body.kinematic)
+        self.assertIsNone(target.rigid_body)
+        # Tip the weapon: without the collider the charm would swing down
+        # through it.
+        start = scene.frame_start
+        target.rotation_euler = (0, 0, 0)
+        target.keyframe_insert("rotation_euler", frame=start)
+        target.rotation_euler = (math.radians(25), 0, 0)
+        target.keyframe_insert("rotation_euler", frame=start + 20)
+        depth = 0.0
+        for f in range(start, start + 40):
+            scene.frame_set(f)
+            inv = target.matrix_world.inverted()
+            for v in obj.data.vertices:
+                p = inv @ (obj.matrix_world @ v.co)
+                if abs(p.x) < 0.5 and abs(p.y) < 0.5:
+                    depth = max(depth, 0.5 - p.z)
+        scene.frame_set(start)
+        self.assertLess(depth, 0.1 * obj.cs_charm.base_height)
+        # A second charm shares the collider; it goes with the last one.
+        other = self.spawn(self.gem)
+        P.place(other, Vector((-0.2, 0, 0.5)), Vector((0, 0, 1)), self.settings, target)
+        physics.add_physics(bpy.context, other)
+        self.assertEqual(other.cs_charm.physics_collider, collider)
+        physics.remove_physics(bpy.context, obj)
+        self.assertIn(collider, list(bpy.data.objects))
+        name = collider.name
+        physics.delete_charm(bpy.context, other)
+        self.assertNotIn(name, bpy.data.objects)
+        self.assertIn(target.data, list(bpy.data.meshes))
+
+    def test_no_collider_when_off(self):
+        target = _cube(size=1.0)
+        self.settings.attach = "PARENT"
+        obj = self.spawn(self.gem)
+        P.place(obj, Vector((0, -0.5, 0)), Vector((0, -1, 0)), self.settings, target)
+        obj.cs_charm.physics_collide = False
+        physics.add_physics(bpy.context, obj)
+        self.assertIsNone(obj.cs_charm.physics_collider)
+
+
+class SceneTest(CharmTestCase):
+    def tearDown(self):
+        for scene in list(bpy.data.scenes)[1:]:
+            bpy.data.scenes.remove(scene)
+
+    def test_scenes_keep_their_charms(self):
+        first = bpy.context.scene
+        self.settings.attach = "PARENT"
+        target = _cube(size=1.0)
+        obj = self.spawn(self.gem)
+        P.place(obj, Vector((0.2, 0, 0.5)), Vector((0, 0, 1)), self.settings, target)
+        physics.add_physics(bpy.context, obj)
+        mine = set(first.objects)
+        second = bpy.data.scenes.new("Second")
+        with bpy.context.temp_override(scene=second, view_layer=second.view_layers[0]):
+            context = bpy.context
+            settings = second.cs_charm_place
+            settings.attach = "PARENT"
+            other_target = bpy.data.objects.new("Other", target.data.copy())
+            second.collection.objects.link(other_target)
+            other = self.spawn(self.gem)
+            P.place(other, Vector((0.2, 0, 0.5)), Vector((0, 0, 1)), settings, other_target)
+            physics.add_physics(context, other)
+        self.assertFalse(mine & set(second.objects))
+        self.assertNotIn(other, list(first.objects))
+        self.assertEqual(set(first.objects), mine)
+        self.assertNotEqual(obj.users_collection[0], other.users_collection[0])
+        self.assertIn(other.cs_charm.physics_collider, list(second.objects))
+        # Same target in both scenes: each scene gets its own collider.
+        second.collection.objects.link(target)
+        with bpy.context.temp_override(scene=second, view_layer=second.view_layers[0]):
+            third = self.spawn(self.gem)
+            P.place(third, Vector((-0.2, 0, 0.5)), Vector((0, 0, 1)), second.cs_charm_place, target)
+            physics.add_physics(bpy.context, third)
+        self.assertNotEqual(third.cs_charm.physics_collider, obj.cs_charm.physics_collider)
+        self.assertNotIn(third.cs_charm.physics_collider, list(first.objects))
+
+
+class DuplicateTest(CharmTestCase):
+    def test_duplicates_get_own_data(self):
+        from cs_charm.ops import duplicates
+        target = _cube(size=1.0)
+        self.settings.attach = "PARENT"
+        obj = self.spawn(self.flask, 100)
+        P.place(obj, Vector((0, -0.5, 0)), Vector((0, -1, 0)), self.settings, target)
+        physics.add_physics(bpy.context, obj)
+        coll = obj.users_collection[0]
+        # Shift+D: own mesh, shared materials, shared helper pointers.
+        copy = obj.copy()
+        copy.data = obj.data.copy()
+        coll.objects.link(copy)
+        # Alt+D: shared mesh.
+        linked = obj.copy()
+        coll.objects.link(linked)
+        bpy.context.view_layer.update()
+        changed = duplicates.make_unique(bpy.context)
+        self.assertEqual(set(changed), {copy, linked})
+        meshes = {o.data for o in (obj, copy, linked)}
+        self.assertEqual(len(meshes), 3)
+        mats = [m for o in (obj, copy, linked) for m in o.data.materials if m]
+        self.assertEqual(len(mats), len(set(mats)))
+        for o in (copy, linked):
+            self.assertFalse(o.cs_charm.physics)
+            self.assertIsNone(o.rigid_body)
+        self.assertTrue(obj.cs_charm.physics)
+        self.assertIn(obj.cs_charm.physics_anchor, list(bpy.data.objects))
+        self.assertNotIn(utils.PROP_MODEL, copy.data)
+        # Changing the copy leaves the original alone.
+        def fill(o):
+            return [n.inputs["Fill Level"].default_value for m in o.data.materials if m and m.node_tree
+                    for n in m.node_tree.nodes if n.type == "GROUP" and "Fill Level" in n.inputs]
+        before = fill(obj)
+        copy.cs_charm.pattern = 777
+        self.assertEqual(fill(obj), before)
+        self.assertEqual(duplicates.make_unique(bpy.context), [])
+
+    def test_handler_schedules_check(self):
+        from cs_charm.ops import duplicates
+        duplicates._on_load(None)
+        self.spawn(self.gem)
+        duplicates._on_depsgraph(bpy.context.scene, None)
+        self.assertTrue(bpy.app.timers.is_registered(duplicates._deferred))
+        bpy.app.timers.unregister(duplicates._deferred)
 
 
 class BuildZipTest(unittest.TestCase):

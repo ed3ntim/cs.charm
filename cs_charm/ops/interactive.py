@@ -11,6 +11,7 @@ from bpy_extras import view3d_utils
 from ..library import registry
 from . import physics
 from . import placement as P
+from . import settle
 from .spawn import create_charm_object, pick_pattern, report_warnings, select_only
 
 HELP = ("LMB: place  |  Shift+LMB: place & continue  |  Wheel: rotate (Shift: fine)  |  "
@@ -53,6 +54,7 @@ class CSCHARM_OT_place_interactive(bpy.types.Operator):
             self.report({"ERROR"}, "No visible mesh surface to place on")
             return {"CANCELLED"}
         self.placed = []
+        self.surfaces = {}  # target name -> settle.Surface (BVH built once)
         self.warnings = []
         self.ghost = None
         self.hit = None
@@ -137,8 +139,20 @@ class CSCHARM_OT_place_interactive(bpy.types.Operator):
         scale = P.charm_scale(settings, self.ghost.cs_charm.base_height, target) * self.scale_factor
         state = self.ghost.cs_charm
         state.align = self.align
-        anchor = location + normal * settings.offset / 100.0 * state.base_height * scale
-        self.ghost.matrix_world = P.orientation_matrix(anchor, normal, self.align, self.rotation, scale=scale)
+        rest = None
+        if self.align == "HANG" and settings.rest_on_surface:
+            rest = P.rest_rotation(self.ghost, self._surface(context, target), location, normal, self.rotation,
+                                   scale, settings.offset, target, settings.physics)
+        self.ghost.matrix_world = P.charm_matrix(self.ghost, location, normal, self.align, self.rotation,
+                                                 scale=scale, offset_percent=settings.offset,
+                                                 target=target if settings.attach != "NONE" else None, rest=rest)
+
+    def _surface(self, context, target):
+        surface = self.surfaces.get(target.name)
+        if surface is None:
+            surface = settle.Surface(target, context.evaluated_depsgraph_get())
+            self.surfaces[target.name] = surface
+        return surface
 
     def _place(self, context):
         obj = self.ghost

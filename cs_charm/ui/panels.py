@@ -106,6 +106,8 @@ class CSCHARM_PT_placement(_Panel, bpy.types.Panel):
         col = layout.column(align=True)
         col.prop(s, "rotation")
         col.prop(s, "offset")
+        if s.align == "HANG":
+            layout.prop(s, "rest_on_surface")
         layout.prop(s, "attach")
         layout.prop(s, "physics")
         layout.operator("cs_charm.reset_placement", icon="LOOP_BACK")
@@ -165,6 +167,8 @@ class CSCHARM_PT_active(_Panel, bpy.types.Panel):
         col.prop(state, "lean")
         col.prop(state, "offset")
         box.row().prop(state, "align", expand=True)
+        if state.align == "HANG":
+            box.prop(state, "rest_on_surface")
         box.operator("cs_charm.set_anchor", icon="PIVOT_CURSOR")
 
         # Attachment / physics
@@ -180,12 +184,16 @@ class CSCHARM_PT_active(_Panel, bpy.types.Panel):
         row.operator("cs_charm.detach", text="", icon="X")
         if state.physics:
             box.label(text="Physics on: play the timeline", icon="PHYSICS")
+            if state.physics_collider is not None:
+                box.label(text=f"Collides with {state.target.name if state.target else 'target'}",
+                          icon="MOD_PHYSICS")
             box.operator("cs_charm.remove_physics", icon="CANCEL")
             if obj.rigid_body is not None:
                 col = box.column(align=True)
                 col.prop(obj.rigid_body, "linear_damping", text="Damping")
                 col.prop(obj.rigid_body, "angular_damping", text="Swing Damping")
         else:
+            box.prop(state, "physics_collide")
             box.operator("cs_charm.add_physics", icon="PHYSICS")
 
         layout.operator("cs_charm.delete", icon="TRASH")

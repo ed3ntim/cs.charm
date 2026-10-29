@@ -6,13 +6,15 @@
     placement.py    ray casts, orientation, attach / detach, stored placement
     physics.py      rigid body pendulum (anchor + point constraint)
     interactive.py  modal placement with live preview
+    settle.py       resting pose on the object around the attachment point
+    duplicates.py   duplicated charms get their own mesh, materials, physics
     charm_ops.py    spawn / edit operators
     library_ops.py  refresh, open folder, show in library
 """
 
 import bpy
 
-from . import charm_ops, interactive, library_ops
+from . import charm_ops, duplicates, interactive, library_ops
 
 _classes = (*library_ops.classes, *charm_ops.classes, *interactive.classes)
 
@@ -20,8 +22,10 @@ _classes = (*library_ops.classes, *charm_ops.classes, *interactive.classes)
 def register():
     for cls in _classes:
         bpy.utils.register_class(cls)
+    duplicates.register()
 
 
 def unregister():
+    duplicates.unregister()
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)

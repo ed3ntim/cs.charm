@@ -80,62 +80,70 @@ class CSCHARM_OT_spawn_at_cursor(bpy.types.Operator):
 
 
 class _CharmOperator:
+    """Acts on the active charm only, never on other selected charms."""
+
     @classmethod
     def poll(cls, context):
-        return context.mode == "OBJECT" and bool(utils.selected_charms(context))
+        return context.mode == "OBJECT" and utils.active_charm(context) is not None
 
 
 class CSCHARM_OT_randomize_pattern(_CharmOperator, bpy.types.Operator):
-    """Give the selected charms random patterns"""
+    """Give the active charm a random pattern"""
     bl_idname = "cs_charm.randomize_pattern"
     bl_label = "Random Pattern"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        for obj in utils.selected_charms(context):
-            obj.cs_charm.pattern = patterns.random_pattern()
+        utils.active_charm(context).cs_charm.pattern = patterns.random_pattern()
         return {"FINISHED"}
 
 
 class CSCHARM_OT_reset_materials(_CharmOperator, bpy.types.Operator):
-    """Rebuild the materials of the selected charms from the library (discards manual changes)"""
+    """Rebuild the materials of the active charm from the library (discards manual changes)"""
     bl_idname = "cs_charm.reset_materials"
     bl_label = "Reset Materials"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        warnings, failed = [], 0
-        for obj in utils.selected_charms(context):
-            try:
-                warnings += rebuild_materials(obj)
-            except RuntimeError:
-                failed += 1
-        if failed:
-            self.report({"WARNING"}, f"{failed} charm(s) not found in the library")
+        try:
+            warnings = rebuild_materials(utils.active_charm(context))
+        except RuntimeError:
+            self.report({"WARNING"}, "Charm not found in the library")
+            return {"CANCELLED"}
         report_warnings(self, warnings)
         return {"FINISHED"}
 
 
-class CSCHARM_OT_attach(_CharmOperator, bpy.types.Operator):
-    """Attach the selected charms to the active object (keeps their position)"""
+class CSCHARM_OT_attach(bpy.types.Operator):
+    """Attach the active charm to the surface it was placed on, or attach the selected charms to the active object (keeps their position)"""
     bl_idname = "cs_charm.attach"
-    bl_label = "Attach to Active"
+    bl_label = "Attach"
     bl_options = {"REGISTER", "UNDO"}
 
     mode: bpy.props.EnumProperty(name="Mode", items=[
-        ("PARENT", "Parent", "Parent to the active object"),
-        ("CHILD_OF", "Child Of", "Child Of constraint to the active object"),
+        ("PARENT", "Parent", "Parent to the target"),
+        ("CHILD_OF", "Child Of", "Child Of constraint to the target"),
     ], default="PARENT")
+
+    @staticmethod
+    def _jobs(context):
+        """[(charm, target)]: the active charm and its own surface, or the
+        selected charms and a non-charm active object."""
+        active = context.active_object
+        charm = utils.active_charm(context)
+        if charm is not None:
+            target = charm.cs_charm.target or charm.cs_charm.surface
+            return [(charm, target)] if target is not None else []
+        if active is None or utils.is_helper(active):
+            return []
+        return [(obj, active) for obj in utils.selected_charms(context)]
 
     @classmethod
     def poll(cls, context):
-        active = context.active_object
-        return (super().poll(context) and active is not None and not utils.is_charm(active)
-                and not utils.is_helper(active))
+        return context.mode == "OBJECT" and bool(cls._jobs(context))
 
     def execute(self, context):
-        target = context.active_object
-        for obj in utils.selected_charms(context):
+        for obj, target in self._jobs(context):
             if obj.cs_charm.physics:
                 physics.remove_physics(context, obj)
             P.adopt_current_transform(obj)
@@ -144,75 +152,70 @@ class CSCHARM_OT_attach(_CharmOperator, bpy.types.Operator):
 
 
 class CSCHARM_OT_detach(_CharmOperator, bpy.types.Operator):
-    """Detach the selected charms from their target (keeps their position)"""
+    """Detach the active charm from its target (keeps its position)"""
     bl_idname = "cs_charm.detach"
     bl_label = "Detach"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        for obj in utils.selected_charms(context):
-            if obj.cs_charm.physics:
-                physics.remove_physics(context, obj)
-            P.attach(obj, None, "NONE")
+        obj = utils.active_charm(context)
+        if obj.cs_charm.physics:
+            physics.remove_physics(context, obj)
+        P.attach(obj, None, "NONE")
         return {"FINISHED"}
 
 
 class CSCHARM_OT_set_anchor(_CharmOperator, bpy.types.Operator):
-    """Use the charms' current positions as their attachment points (after moving them with G)"""
+    """Use the active charm's current position as its attachment point (after moving it with G)"""
     bl_idname = "cs_charm.set_anchor"
     bl_label = "Set Anchor from Position"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        for obj in utils.selected_charms(context):
-            P.adopt_current_transform(obj)
-            P.update_transform(obj)
+        obj = utils.active_charm(context)
+        P.adopt_current_transform(obj)
+        P.update_transform(obj)
         return {"FINISHED"}
 
 
 class CSCHARM_OT_add_physics(_CharmOperator, bpy.types.Operator):
-    """Let the selected charms swing from their attachment points (rigid body pendulum). Play the timeline to simulate"""
+    """Let the active charm swing from its attachment point (rigid body pendulum). Play the timeline to simulate"""
     bl_idname = "cs_charm.add_physics"
     bl_label = "Add Physics"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        count = 0
-        for obj in utils.selected_charms(context):
-            if not obj.cs_charm.physics:
-                if not obj.cs_charm.placed:
-                    P.store_anchor(obj, obj.matrix_world.translation, Vector((0.0, -1.0, 0.0)))
-                    obj.cs_charm.placed = True
-                physics.add_physics(context, obj)
-                count += 1
-        self.report({"INFO"}, f"Physics on {count} charm(s); play the timeline to simulate")
+        obj = utils.active_charm(context)
+        if not obj.cs_charm.physics:
+            if not obj.cs_charm.placed:
+                P.store_anchor(obj, obj.matrix_world.translation, Vector((0.0, -1.0, 0.0)))
+                obj.cs_charm.placed = True
+            physics.add_physics(context, obj)
+        self.report({"INFO"}, "Physics on: play the timeline to simulate")
         return {"FINISHED"}
 
 
 class CSCHARM_OT_remove_physics(_CharmOperator, bpy.types.Operator):
-    """Remove the swing physics and re-attach the charms as before"""
+    """Remove the swing physics and re-attach the active charm as before"""
     bl_idname = "cs_charm.remove_physics"
     bl_label = "Remove Physics"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        for obj in utils.selected_charms(context):
-            if obj.cs_charm.physics:
-                physics.remove_physics(context, obj)
+        obj = utils.active_charm(context)
+        if obj.cs_charm.physics:
+            physics.remove_physics(context, obj)
         return {"FINISHED"}
 
 
 class CSCHARM_OT_delete(_CharmOperator, bpy.types.Operator):
-    """Delete the selected charms including their physics helpers"""
+    """Delete the active charm including its physics helpers"""
     bl_idname = "cs_charm.delete"
     bl_label = "Delete Charm"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        charms = utils.selected_charms(context)
-        for obj in charms:
-            physics.delete_charm(context, obj)
-        self.report({"INFO"}, f"Deleted {len(charms)} charm(s)")
+        physics.delete_charm(context, utils.active_charm(context))
         return {"FINISHED"}
 
 

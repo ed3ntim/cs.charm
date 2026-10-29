@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "cs_charm"
-version = "1.0.0"
+version = "1.2.0"
 name = "cs.charm"
 tagline = "Spawn CS2 charms with their patterns and attach them to objects"
 maintainer = "ed3n <contact@ed3n.gallery>"

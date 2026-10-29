@@ -5,7 +5,9 @@ orientation at an attachment point, attaching to a target and re-applying
 the stored placement when the user edits it in the Active Charm panel.
 
 A charm's origin is its attachment point (top of the chain); the model
-hangs along -Z and is thin along X (its face looks along +/-X).
+hangs along -Z and its face looks along +X (CS2 models sit almost entirely
+in front of the origin). On upward-facing surfaces a hanging charm rests
+on the surface instead of passing through it.
 
 Placement is stored on ``Object.cs_charm``: anchor point and surface normal
 (in target space when attached, so they follow the target), scale,
@@ -100,34 +102,164 @@ def _perpendicular(v):
     return v.cross(other).normalized()
 
 
-def orientation_matrix(location, normal, align="HANG", rotation=0.0, tilt=0.0, lean=0.0, scale=1.0):
+REST_THRESHOLD = 0.05  # normal.z above which a hanging charm rests on the surface
+REST_FALLBACK_WEIGHT = 0.1  # pull toward the rest direction on (nearly) flat tops
+
+
+def _in_plane(v, n):
+    """``v`` projected into the plane with normal ``n`` (may be zero)."""
+    return v - v.dot(n) * n
+
+
+def orientation_matrix(location, normal, align="HANG", rotation=0.0, tilt=0.0, lean=0.0, scale=1.0,
+                       rest_dir=None):
     """World matrix of a charm whose attachment point sits at ``location``.
 
-    HANG:    local -Z points down, the face (+X) looks away from the surface
+    HANG:    on walls and overhangs local -Z points down and the face (+X)
+             looks away from the surface. On upward-facing surfaces the
+             charm cannot hang through the object, so it rests on it: back
+             on the surface, face up, lying downhill. On (nearly) flat tops
+             it lies toward ``rest_dir`` (world vector, e.g. toward the
+             target's center), or -Y without one. Both cases meet at
+             vertical walls.
     SURFACE: local -Z points along the surface normal (away from it)
-    ``rotation`` turns around the hanging axis, ``tilt`` swings sideways
-    (around the face axis), ``lean`` toward / away from the surface.
+    ``rotation`` turns around the hanging axis (around the normal when
+    resting), ``tilt`` swings sideways (around the face axis), ``lean``
+    toward / away from the surface.
     """
     n = Vector(normal)
     n = n.normalized() if n.length > 1e-9 else WORLD_UP.copy()
+    spin = rotation
     if align == "SURFACE":
         z = -n
         x = (WORLD_UP - WORLD_UP.dot(z) * z)
         x = x.normalized() if x.length > 1e-6 else _perpendicular(z)
+    elif n.z > REST_THRESHOLD:
+        down = _in_plane(-WORLD_UP, n)  # downhill, zero on a flat top
+        fallback = _in_plane(Vector(rest_dir) if rest_dir is not None else Vector((0.0, -1.0, 0.0)), n)
+        if fallback.length > 1e-9:
+            down += fallback.normalized() * REST_FALLBACK_WEIGHT
+        down = down.normalized() if down.length > 1e-9 else _perpendicular(n)
+        down = Matrix.Rotation(rotation, 3, n) @ down
+        x, z = n, -down
+        spin = 0.0
     else:
         z = WORLD_UP.copy()
         x = Vector((n.x, n.y, 0.0))
         x = x.normalized() if x.length > 1e-6 else Vector((1.0, 0.0, 0.0))
     y = z.cross(x).normalized()
     basis = Matrix((x, y, z)).transposed().to_4x4()
-    local = (Matrix.Rotation(rotation, 4, "Z")
+    local = (Matrix.Rotation(spin, 4, "Z")
              @ Matrix.Rotation(tilt, 4, "X")
              @ Matrix.Rotation(-lean, 4, "Y"))
     return Matrix.Translation(location) @ basis @ local @ Matrix.Scale(scale, 4)
 
 
-def offset_distance(state_or_settings, base_height, scale):
-    return state_or_settings.offset / 100.0 * base_height * scale
+def back_depth(obj):
+    """How far the model reaches behind its attachment point (local -X),
+    in model units. Lifting by this keeps the back out of the surface."""
+    try:
+        return max(0.0, -min(corner[0] for corner in obj.bound_box))
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+
+
+def rest_direction(target, anchor):
+    """World direction from ``anchor`` toward the target's center (a charm
+    resting on a flat top lies that way, e.g. along a rifle), or None."""
+    if target is None:
+        return None
+    center = sum((Vector(c) for c in target.bound_box), Vector()) / 8.0
+    return target.matrix_world @ center - Vector(anchor)
+
+
+def lift_distance(obj, offset_percent, base_height, scale, align):
+    """Distance along the normal from the surface point to the charm origin."""
+    lift = offset_percent / 100.0 * base_height * scale
+    if align != "SURFACE":
+        lift += back_depth(obj) * scale
+    return lift
+
+
+def charm_matrix(obj, anchor, normal, align, rotation=0.0, tilt=0.0, lean=0.0, scale=1.0,
+                 offset_percent=0.0, target=None, rest=None):
+    """World matrix for ``obj`` attached at a surface point (used by the
+    stored placement and the interactive preview alike). ``rest`` is a
+    resting rotation from ops/settle.py; without it the orientation comes
+    from the surface normal alone."""
+    location = attach_point(obj, anchor, normal, align, scale, offset_percent)
+    if rest is None:
+        n = Vector(normal)
+        n = n.normalized() if n.length > 1e-9 else WORLD_UP.copy()
+        return orientation_matrix(location, n, align, rotation, tilt, lean, scale,
+                                  rest_dir=rest_direction(target, anchor))
+    local = Matrix.Rotation(tilt, 4, "X") @ Matrix.Rotation(-lean, 4, "Y")
+    return Matrix.Translation(location) @ rest.to_4x4() @ local @ Matrix.Scale(scale, 4)
+
+
+def attach_point(obj, anchor, normal, align, scale, offset_percent):
+    """Charm origin for a surface point: lifted along the normal."""
+    n = Vector(normal)
+    n = n.normalized() if n.length > 1e-9 else WORLD_UP.copy()
+    return Vector(anchor) + n * lift_distance(obj, offset_percent, obj.cs_charm.base_height, scale, align)
+
+
+def rest_rotation(obj, surface, anchor, normal, rotation, scale, offset_percent, rest_target=None, hull=False):
+    """Resting rotation (world 3x3) of ``obj`` on ``surface`` (a
+    settle.Surface), or None when it cannot rest there. ``hull``: rest as
+    the convex hull physics uses (start pose of the simulation)."""
+    from . import settle
+    if obj.data is None:
+        return None
+    pivot = attach_point(obj, anchor, normal, "HANG", scale, offset_percent)
+    return settle.solve(surface, obj.data, pivot, normal, scale, rotation,
+                        rest_direction(rest_target, anchor), hull)
+
+
+def resting_surface(obj):
+    """Object a hanging charm rests on (its target, else where it was placed)."""
+    state = obj.cs_charm
+    if state.align != "HANG" or not state.rest_on_surface:
+        return None
+    surface = state.target if state.attach != "NONE" and state.target is not None else state.surface
+    return surface if surface is not None and surface.type == "MESH" else None
+
+
+def rests_as_hull(obj):
+    """With colliding physics the charm rests as its convex hull."""
+    state = obj.cs_charm
+    return state.physics and state.physics_collide
+
+
+def _rest_key(obj, surface):
+    state = obj.cs_charm
+    values = (*state.anchor, *state.normal, state.scale, state.rotation, state.offset)
+    return (f"{surface.name_full}|{state.attach}|{len(obj.data.vertices)}|{int(rests_as_hull(obj))}|"
+            + ",".join(f"{v:.6g}" for v in values))
+
+
+def _stored_rest(obj, surface):
+    """Resting rotation for the stored placement: cached in surface space
+    (follows the surface when it moves), solved again when inputs change."""
+    from . import settle
+    state = obj.cs_charm
+    to_world = surface.matrix_world.to_quaternion().to_matrix()
+    key = _rest_key(obj, surface)
+    if state.rest_key == key:
+        x, z = Vector(state.rest_x), Vector(state.rest_z)
+        return to_world @ Matrix((x, z.cross(x), z)).transposed()
+    anchor, normal = world_anchor(obj)
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    rest = rest_rotation(obj, settle.Surface(surface, depsgraph), anchor, normal, state.rotation, state.scale,
+                         state.offset, surface, rests_as_hull(obj))
+    if rest is None:
+        state.rest_key = ""
+        return None
+    local = to_world.transposed() @ rest
+    state.rest_x = local.col[0]
+    state.rest_z = local.col[2]
+    state.rest_key = key
+    return rest
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +343,9 @@ def place(obj, location, normal, settings, target=None, scale=None, rotation=Non
         state.rotation = settings.rotation if rotation is None else rotation
         state.offset = settings.offset
         state.align = settings.align
+        state.rest_on_surface = settings.rest_on_surface
+        state.surface = target
+        state.rest_key = ""
         state.tilt = state.lean = 0.0
         state.placed = True
         state.target = None
@@ -221,14 +356,18 @@ def place(obj, location, normal, settings, target=None, scale=None, rotation=Non
     update_transform(obj)
     if target is not None and settings.attach != "NONE":
         attach(obj, target, settings.attach)
+        update_transform(obj)  # the target sets the rest direction on flat tops
 
 
 def placement_matrix(obj):
     """World matrix from the stored placement."""
     state = obj.cs_charm
     anchor, normal = world_anchor(obj)
-    anchor = anchor + normal * offset_distance(state, state.base_height, state.scale)
-    return orientation_matrix(anchor, normal, state.align, state.rotation, state.tilt, state.lean, state.scale)
+    target = state.target if state.attach != "NONE" else None
+    surface = resting_surface(obj)
+    rest = _stored_rest(obj, surface) if surface is not None else None
+    return charm_matrix(obj, anchor, normal, state.align, state.rotation, state.tilt, state.lean, state.scale,
+                        state.offset, target, rest)
 
 
 def update_transform(obj):
@@ -262,5 +401,6 @@ def adopt_current_transform(obj):
     moved the charm with G). Keeps the stored normal."""
     _anchor, normal = world_anchor(obj)
     state = obj.cs_charm
-    loc = obj.matrix_world.translation - normal * offset_distance(state, state.base_height, state.scale)
+    loc = obj.matrix_world.translation - normal * lift_distance(obj, state.offset, state.base_height, state.scale,
+                                                                 state.align)
     store_anchor(obj, loc, normal)

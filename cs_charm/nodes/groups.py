@@ -32,7 +32,7 @@ from .builder import GroupBuilder, principled, set_bsdf
 
 # Bump when group contents change; outdated groups are renamed (existing
 # materials keep working) and rebuilt.
-GROUP_VERSION = 1
+GROUP_VERSION = 2
 VERSION_KEY = "cs_charm_version"
 
 WEAPON_GROUP = "CS2 Charm Weapon"
@@ -219,14 +219,22 @@ def _build_weapon(tree):
 
 def _build_liquid(tree):
     b = GroupBuilder(tree)
-    color = b.input("Color", "COLOR", default=(0.6, 0.6, 0.6, 1.0), description="g_tColorA RGB")
+    color = b.input("Color", "COLOR", default=(0.6, 0.6, 0.6, 1.0), description="g_tColorA RGB: glass tint and print")
     print_alpha = b.input("Color Alpha", default=1.0, lo=0.0, hi=1.0, factor=True,
-                          description="g_tColorA alpha: opaque print / body (1) or window (0)")
+                          description="g_tColorA alpha: opaque part (1) or glass (0)")
     normal = b.input("Normal Map", "COLOR", default=FLAT_NORMAL, description="g_tNormalA")
     mask = b.input("Liquid Mask", default=1.0, lo=0.0, hi=1.0, factor=True,
-                   description="g_tLiquidMask: where the liquid is visible")
-    bottom = b.input("Bottom", default=-1.0, description="Object-space Z of an empty container")
-    top = b.input("Top", default=0.0, description="Object-space Z of a full container")
+                   description="g_tLiquidMask: where the glass holds liquid")
+    center = b.input("Liquid Center", "VECTOR", default=(0.0, 0.0, -0.03),
+                     description="Object-space point the liquid levels are measured from "
+                                 "(g_flLiquidCenterOffset)")
+    upright = b.input("Level Upright", "VECTOR", default=(-0.015, 0.0, 0.015),
+                      description="Liquid height above the center when empty, half and full, "
+                                  "charm hanging upright (g_vLiquidLevelUpwardsMinMidMax)")
+    sideways = b.input("Level Sideways", "VECTOR", default=(-0.015, 0.0, 0.015),
+                       description="Same for the charm lying on its side (g_vLiquidLevelSidewardsMinMidMax)")
+    upside = b.input("Level Upside Down", "VECTOR", default=(-0.015, 0.0, 0.015),
+                     description="Same for the charm upside down (g_vLiquidLevelDownwardsMinMidMax)")
     liquid = b.input("Liquid Color", "COLOR", default=(0.8, 0.08, 0.19, 1.0), description="g_vLiquidColor")
     hue = b.input("Liquid Hue Shift", default=0.0, lo=-3600.0, hi=3600.0,
                   description="g_flLiquidColorHueShift in degrees (pattern driven on Butane Buddy)")
@@ -237,68 +245,139 @@ def _build_liquid(tree):
                       description="g_flLiquidRoughness")
     l_emit = b.input("Liquid Emission", default=0.0, lo=0.0, hi=100.0, description="g_flLiquidEmissiveStrength")
     glow = b.input("Inner Glow", default=0.0, lo=0.0, hi=10.0, description="g_flLiquidInnerGlow")
-    empty = b.input("Brighten Empty", default=0.2, lo=0.0, hi=10.0, description="g_flBrightenEmptyArea")
+    empty = b.input("Brighten Empty", default=0.2, lo=0.0, hi=10.0,
+                    description="g_flBrightenEmptyArea: lightens and closes the empty glass")
     waterline = b.input("Waterline", default=0.8, lo=0.0, hi=10.0, description="g_flWaterLineStrength")
     m_min = b.input("Mask Min", default=0.0, lo=0.0, hi=1.0, description="g_flMaskMinimum")
     m_max = b.input("Mask Max", default=1.0, lo=0.0, hi=1.0, description="g_flMaskMaximum")
     color_tint = b.input("Color Tint", "COLOR", default=WHITE, description="g_vColorTint")
+    glass_t = b.input("Glass Transparency", default=0.95, lo=0.0, hi=2.0,
+                      description="g_flCubeRefractTransparency: how much the empty glass lets through")
+    liquid_t = b.input("Liquid Transparency", default=1.0, lo=0.0, hi=2.0,
+                       description="g_flCubeRefractLiquidTransparency: how much the liquid lets through")
     glass_rough = b.input("Glass Roughness", default=0.05, lo=0.0, hi=1.0, factor=True)
-    body_rough = b.input("Body Roughness", default=0.35, lo=0.0, hi=1.0, factor=True)
-    body_metal = b.input("Body Metallic", default=0.0, lo=0.0, hi=1.0, factor=True)
+    body_rough = b.input("Body Roughness", default=0.3, lo=0.0, hi=1.0, factor=True)
+    body_metal = b.input("Body Metallic", default=0.8, lo=0.0, hi=1.0, factor=True)
     n_strength = b.input("Normal Strength", default=1.0, lo=0.0, hi=10.0)
     out = b.output("BSDF")
 
-    # Normalized height inside the container (0 bottom, 1 top).
-    b.column(-1000)
-    coords = b.node("ShaderNodeTexCoord", y=-200)
-    _x, _y, z = b.separate(coords.outputs["Object"], y=-200)
-    b.column(-800)
-    height = b.map_range(z, bottom, top, y=-200)
-    window = b.map_range(mask, m_min, m_max, y=-400)
-    b.column(-600)
-    edge = 0.004
-    filled = b.map_range(height, b.math("ADD", level, edge, y=-200), b.math("SUBTRACT", level, edge, y=-300),
-                         y=-200, interpolation="SMOOTHSTEP")
-    line = b.map_range(b.math("ABSOLUTE", b.math("SUBTRACT", height, level, y=-500), y=-500), 0.02, 0.0,
-                       y=-500, interpolation="SMOOTHSTEP")
-    line = b.math("MULTIPLY", line, waterline, y=-500)
+    # World up in object space: the liquid surface stays level when the
+    # charm tilts, swings or lies on something.
+    b.column(-1500)
+    up_t = b.node("ShaderNodeVectorTransform", y=-300, vector_type="VECTOR",
+                  convert_from="WORLD", convert_to="OBJECT")
+    up_t.inputs[0].default_value = (0.0, 0.0, 1.0)
+    coords = b.node("ShaderNodeTexCoord", y=-600)
+    b.column(-1300)
+    up = b.vmath("NORMALIZE", up_t.outputs[0], y=-300)
+    _ux, _uy, uz = b.separate(up, y=-100)
 
-    # Liquid color: hue shifted, brightness applied.
+    # Level range for the current orientation: upright (uz = 1), on the
+    # side (uz = 0) or upside down (uz = -1), blended in between.
+    b.column(-1100)
+    side_up = b.mix("VECTOR", b.math("MAXIMUM", uz, 0.0, y=0), sideways, upright, y=0)
+    b.column(-900)
+    rng = b.mix("VECTOR", b.math("MAXIMUM", b.math("MULTIPLY", uz, -1.0, y=-150), 0.0, y=-150),
+                side_up, upside, y=0)
+    lo, mid, hi = b.separate(rng, y=0)
+    # Piecewise linear: 0 -> min, 0.5 -> mid, 1 -> max.
     b.column(-700)
-    liq = _hue_shift(b, liquid, hue, y=200)
-    b.column(-450)
-    liq = b.vmath("SCALE", liq, scale=b.math("MULTIPLY", l_bright, 0.5, y=200), y=200)
-    liq_lit = b.vmath("ADD", liq, b.vmath("SCALE", (1.0, 1.0, 1.0), scale=line, y=100), y=200)
-    emit_strength = b.math("ADD", l_emit, b.math("MULTIPLY", glow, 2.0, y=50), y=50)
+    t1 = b.math("MULTIPLY", level, 2.0, y=-150, clamp=True)
+    t2 = b.math("SUBTRACT", b.math("MULTIPLY", level, 2.0, y=-250), 1.0, y=-250, clamp=True)
+    b.column(-500)
+    height = b.math("ADD", b.math("ADD", lo, b.math("MULTIPLY", b.math("SUBTRACT", mid, lo, y=0), t1, y=0), y=0),
+                    b.math("MULTIPLY", b.math("SUBTRACT", hi, mid, y=-200), t2, y=-200), y=-100)
+    # Signed distance of the shaded point above the liquid surface.
+    rel = b.vmath("SUBTRACT", coords.outputs["Object"], center, y=-400)
+    b.column(-300)
+    dist = b.math("SUBTRACT", b.vmath("DOT_PRODUCT", rel, up, y=-400), height, y=-300)
+    edge = 0.0003
+    filled = b.map_range(dist, edge, -edge, y=-300, interpolation="SMOOTHSTEP")
+    window = b.map_range(mask, m_min, m_max, y=-500)
+    b.column(-100)
+    in_liquid = b.math("MULTIPLY", filled, window, y=-400)
+    line = b.map_range(b.math("ABSOLUTE", dist, y=-600), 0.0006, 0.0, y=-600, interpolation="SMOOTHSTEP")
+    line = b.math("MULTIPLY", b.math("MULTIPLY", line, waterline, y=-600), window, y=-600)
 
-    nmap = b.node("ShaderNodeNormalMap", x=-450, y=-700)
+    # Colors: glass tint from the texture, liquid hue shifted.
+    b.column(-1100)
+    tinted = b.mix("RGBA", 1.0, color, color_tint, blend="MULTIPLY", y=600)
+    liq = _hue_shift(b, liquid, hue, y=350)
+    b.column(-800)
+    liq = b.vmath("SCALE", liq, scale=b.math("MULTIPLY", l_bright, 0.5, y=350), y=350)
+    liq_lit = b.mix("RGBA", line, liq, WHITE, y=250)
+    # Brighten Empty strengthens the glass color (red window -> salmon).
+    empty_col = b.vmath("ADD", b.vmath("SCALE", tinted, scale=b.math("ADD", 1.0, b.math("MULTIPLY", empty, 0.6, y=500),
+                                                                       y=500), y=500),
+                        b.combine(*(b.math("MULTIPLY", empty, 0.05, y=450),) * 3, y=450), y=500)
+
+    nmap = b.node("ShaderNodeNormalMap", x=-800, y=-800)
     b.set_or_link(nmap, "Strength", n_strength)
     b.set_or_link(nmap, "Color", normal)
-    tinted = b.mix("RGBA", 1.0, color, color_tint, blend="MULTIPLY", x=-450, y=500)
+    n_out = nmap.outputs[0]
 
-    # Three surfaces: printed body, filled window, empty window.
-    body = principled(b, x=0, y=700)
-    set_bsdf(b, body, Base_Color=tinted, Metallic=body_metal, Roughness=body_rough, Normal=nmap.outputs[0])
-    fluid = principled(b, x=0, y=200)
-    set_bsdf(b, fluid, Base_Color=liq_lit, Roughness=l_rough, Normal=nmap.outputs[0],
-             Coat_Weight=1.0, Coat_Roughness=glass_rough, Emission_Color=liq, Emission_Strength=emit_strength)
-    glass_col = b.mix("RGBA", b.math("MINIMUM", b.math("MULTIPLY", empty, 0.3, x=-200, y=-300), 1.0,
-                                     x=-200, y=-300), tinted, WHITE, x=-200, y=-300)
-    glass = principled(b, x=0, y=-300)
-    set_bsdf(b, glass, Base_Color=glass_col, Roughness=glass_rough, Transmission_Weight=1.0,
-             IOR=1.45, Normal=nmap.outputs[0])
+    # Opaque parts (alpha 1): metal and paint.
+    body = principled(b, x=200, y=900)
+    set_bsdf(b, body, Base_Color=tinted, Metallic=body_metal, Roughness=body_rough, Normal=n_out)
 
-    b.column(300)
-    interior = b.node("ShaderNodeMixShader", y=0)
-    b.set_or_link(interior, 0, filled)
-    b.link(glass.outputs[0], interior.inputs[1])
-    b.link(fluid.outputs[0], interior.inputs[2])
-    b.column(500)
-    show_window = b.math("MULTIPLY", window, b.math("SUBTRACT", 1.0, print_alpha, y=300), y=300)
-    final = b.node("ShaderNodeMixShader", y=200)
-    b.set_or_link(final, 0, show_window)
-    b.link(body.outputs[0], final.inputs[1])
-    b.link(interior.outputs[0], final.inputs[2])
+    # Back faces (the far wall seen through the glass) get no extra
+    # reflection layer.
+    geo = b.node("ShaderNodeNewGeometry", x=-800, y=800)
+    inner = geo.outputs["Backfacing"]
+
+    # Empty glass: tinted see-through, closed and lightened by Brighten Empty.
+    b.column(-300)
+    empty_opacity = b.math("SUBTRACT", 1.0, b.math("SUBTRACT", glass_t, b.math("MULTIPLY", empty, 0.4, y=650),
+                                                   y=650), y=650, clamp=True)
+    see_glass = b.node("ShaderNodeBsdfTransparent", x=0, y=550)
+    b.set_or_link(see_glass, "Color", b.mix("RGBA", 0.3, WHITE, empty_col, x=-200, y=600))
+    glass_body = principled(b, x=0, y=450)
+    set_bsdf(b, glass_body, Base_Color=empty_col, Roughness=glass_rough, Normal=n_out,
+             Emission_Color=empty_col, Emission_Strength=b.math("MULTIPLY", empty, 0.3, x=-300, y=350))
+    b.column(250)
+    empty_sh = b.node("ShaderNodeMixShader", y=500)
+    b.set_or_link(empty_sh, 0, empty_opacity)
+    b.link(see_glass.outputs[0], empty_sh.inputs[1])
+    b.link(glass_body.outputs[0], empty_sh.inputs[2])
+
+    # Liquid: colored see-through plus a lit, slightly glossy body.
+    b.column(-300)
+    liquid_opacity = b.math("SUBTRACT", 1.0, b.math("MULTIPLY", liquid_t, 0.8, y=100), y=100, clamp=True)
+    liquid_opacity = b.math("MAXIMUM", liquid_opacity, line, y=0)
+    see_liquid = b.node("ShaderNodeBsdfTransparent", x=0, y=50)
+    b.set_or_link(see_liquid, "Color", b.vmath("MINIMUM", liq, (1.0, 1.0, 1.0), x=-200, y=50))
+    fluid = principled(b, x=0, y=-100)
+    set_bsdf(b, fluid, Base_Color=liq_lit, Roughness=l_rough, Normal=n_out, Emission_Color=liq,
+             Emission_Strength=b.math("ADD", l_emit, b.math("MULTIPLY", glow, 2.0, x=-300, y=-200), x=-300, y=-200))
+    b.column(250)
+    liquid_sh = b.node("ShaderNodeMixShader", y=0)
+    b.set_or_link(liquid_sh, 0, liquid_opacity)
+    b.link(see_liquid.outputs[0], liquid_sh.inputs[1])
+    b.link(fluid.outputs[0], liquid_sh.inputs[2])
+
+    # Glass region: empty or liquid, with a glass reflection on top.
+    b.column(450)
+    interior = b.node("ShaderNodeMixShader", y=200)
+    b.set_or_link(interior, 0, in_liquid)
+    b.link(empty_sh.outputs[0], interior.inputs[1])
+    b.link(liquid_sh.outputs[0], interior.inputs[2])
+    fresnel = b.node("ShaderNodeFresnel", y=-100)
+    b.set_or_link(fresnel, "IOR", 1.45)
+    b.set_or_link(fresnel, "Normal", n_out)
+    gloss = b.node("ShaderNodeBsdfGlossy", y=-300)
+    b.set_or_link(gloss, "Roughness", glass_rough)
+    b.set_or_link(gloss, "Normal", n_out)
+    b.column(650)
+    glass = b.node("ShaderNodeMixShader", y=200)
+    b.set_or_link(glass, 0, b.math("MULTIPLY", fresnel.outputs[0], b.math("SUBTRACT", 1.0, inner, y=0), y=0))
+    b.link(interior.outputs[0], glass.inputs[1])
+    b.link(gloss.outputs[0], glass.inputs[2])
+
+    b.column(850)
+    final = b.node("ShaderNodeMixShader", y=400)
+    b.set_or_link(final, 0, print_alpha)
+    b.link(glass.outputs[0], final.inputs[1])
+    b.link(body.outputs[0], final.inputs[2])
     b.link(final.outputs[0], out)
 
 

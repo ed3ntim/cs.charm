@@ -136,13 +136,14 @@ def _strip_suffix(name):
     return head if head and tail.isdigit() and len(tail) == 3 else name
 
 
-def _liquid_range(mesh, slot):
-    """Object-space Z range of the faces using material ``slot``."""
-    zs = [mesh.vertices[v].co.z for poly in mesh.polygons if poly.material_index == slot
-          for v in poly.vertices]
-    if not zs:
+def _liquid_bounds(mesh, slot):
+    """Object-space bounding box (min, max) of the faces using ``slot``."""
+    cos = [mesh.vertices[v].co for poly in mesh.polygons if poly.material_index == slot
+           for v in poly.vertices]
+    if not cos:
         return None
-    return min(zs), max(zs)
+    return (tuple(min(c[i] for c in cos) for i in range(3)),
+            tuple(max(c[i] for c in cos) for i in range(3)))
 
 
 def _spec_for_slot(charm, slot_name, vmat):
@@ -184,8 +185,8 @@ def setup_materials(obj, charm, pattern):
         old = mesh.materials[i]
         if spec is None:
             continue  # importer PBR material stays (fallback)
-        liquid_range = _liquid_range(mesh, i) if spec.is_liquid else None
-        mat, warn = M.build_material(spec, f"{charm.name} {slot_name}", pattern, liquid_range)
+        bounds = _liquid_bounds(mesh, i) if spec.is_liquid else None
+        mat, warn = M.build_material(spec, f"{charm.name} {slot_name}", pattern, bounds)
         warnings += warn
         mesh.materials[i] = mat
         replaced.append(old)
@@ -201,6 +202,9 @@ def create_charm_object(context, charm, pattern=0):
     template, fresh = template_mesh(charm)
     mesh = template if fresh else template.copy()
     if not fresh:
+        # Only the template is the cached import; copies are plain charm meshes.
+        if utils.PROP_MODEL in mesh:
+            del mesh[utils.PROP_MODEL]
         mesh.materials.clear()
         for mat in template.materials:
             mesh.materials.append(mat)

@@ -7,11 +7,17 @@ Setup (Blender rigid bodies, Bullet):
     target ── parent ── "<charm> Anchor"   tiny mesh, passive + animated
                            └─ "<charm> Pivot"  empty, Point constraint
                                                (Anchor <-> charm)
+    target ── parent ── "<target> Collider"  shares the target's mesh,
+                                             passive + animated, mesh shape
     charm                  active rigid body, convex hull, small margin
 
 The anchor follows the target (parented), so moving or animating the
-weapon makes the charm swing. Collisions between anchor and charm are
-disabled. Play the timeline (or bake the rigid body cache) to simulate.
+weapon makes the charm swing. The collider follows it the same way, so the
+charm also rests on and bumps against the weapon while it moves; it is a
+separate object because the target itself must not become a rigid body
+(that would ignore its parenting). One collider per target, shared by all
+charms on it. Collisions between anchor and charm are disabled. Play the
+timeline (or bake the rigid body cache) to simulate.
 Rigid bodies ignore parenting, so the charm itself is detached while
 physics is on; removing physics re-attaches it.
 """
@@ -85,6 +91,43 @@ def _new_helper(context, name, data, location, parent):
     return obj
 
 
+def _collider_users(collider):
+    return [o for o in bpy.data.objects if utils.is_charm(o) and o.cs_charm.physics_collider == collider]
+
+
+def ensure_collider(context, target):
+    """Passive mesh collider that follows ``target`` (shared per target
+    within a scene: each scene simulates its own rigid body world)."""
+    for obj in context.scene.objects:
+        if utils.is_helper(obj) and obj.get(utils.PROP_COLLIDER) == target.name_full                 and obj.parent == target and obj.data == target.data:
+            return obj
+    collider = _new_helper(context, f"{target.name} Collider", target.data, (0.0, 0.0, 0.0), None)
+    collider[utils.PROP_COLLIDER] = target.name_full
+    collider.parent = target
+    collider.matrix_parent_inverse.identity()
+    collider.matrix_basis.identity()
+    collider.display_type = "WIRE"
+    with _override(context, collider):
+        bpy.ops.rigidbody.object_add(type="PASSIVE")
+    rb = collider.rigid_body
+    rb.kinematic = True
+    rb.collision_shape = "MESH"
+    rb.mesh_source = "BASE"
+    rb.use_margin = True
+    rb.collision_margin = 0.0
+    rb.friction = 0.6
+    collider.hide_set(True)
+    collider.hide_select = True
+    return collider
+
+
+def _release_collider(collider):
+    """Remove a collider no charm uses any more."""
+    if collider is None or _collider_users(collider):
+        return
+    bpy.data.objects.remove(collider, do_unlink=True)
+
+
 def has_physics(obj):
     return obj.cs_charm.physics and obj.rigid_body is not None
 
@@ -95,10 +138,14 @@ def add_physics(context, obj):
     if has_physics(obj):
         return state.physics_anchor
     ensure_world(context)
+    target = state.target
+    if state.physics_collide and target is not None and target.type == "MESH":
+        # Start from the rest pose of the convex hull, not stuck in the collider.
+        state.physics = True
+        P.update_transform(obj)
     context.view_layer.update()
     anchor_w, _normal = P.world_anchor(obj)
     pivot_w = obj.matrix_world.translation.copy()
-    target = state.target
 
     # The charm: unattached active rigid body.
     keep_target, keep_mode = state.target, state.attach
@@ -122,6 +169,13 @@ def add_physics(context, obj):
         bpy.ops.rigidbody.object_add(type="PASSIVE")
     anchor.rigid_body.kinematic = True
     anchor.rigid_body.collision_shape = "BOX"
+    # Passive objects never collide with each other: the anchor sits in the
+    # collider's surface without trouble.
+    collider = None
+    if state.physics_collide and target is not None and target.type == "MESH":
+        collider = ensure_collider(context, target)
+        # Overlaps left at the start would make the charm jump away.
+        context.scene.rigidbody_world.use_split_impulse = True
 
     # Pivot: Point constraint between anchor and charm.
     pivot = _new_helper(context, f"{obj.name} Pivot", None, pivot_w, anchor)
@@ -137,6 +191,7 @@ def add_physics(context, obj):
     state.physics = True
     state.physics_anchor = anchor
     state.physics_pivot = pivot
+    state.physics_collider = collider
     # Keep target and mode for re-attaching later; the anchor stays in
     # target space so editing the placement still works.
     state.target, state.attach = keep_target, keep_mode
@@ -171,6 +226,8 @@ def remove_physics(context, obj):
             bpy.ops.rigidbody.object_remove()
     state.physics_anchor = None
     state.physics_pivot = None
+    collider, state.physics_collider = state.physics_collider, None
+    _release_collider(collider)
     state.physics = False
     target, mode = state.target, state.attach
     # Back to the rest pose, then attach again.

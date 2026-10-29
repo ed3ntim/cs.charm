@@ -136,6 +136,11 @@ class CSCHARM_PG_placement(bpy.types.PropertyGroup):
         default=0.0, soft_min=-50.0, soft_max=100.0, subtype="PERCENTAGE",
     )
     attach: EnumProperty(name="Attach", items=ATTACH_ITEMS, default="PARENT")
+    rest_on_surface: BoolProperty(
+        name="Rest on Surface", default=True,
+        description="Hanging charms settle on the object around the attachment point instead of "
+                    "passing through it (tops, slopes, curved or complex shapes)",
+    )
     physics: BoolProperty(
         name="Physics", default=False,
         description="Let the charm swing from its attachment point (rigid body pendulum). "
@@ -195,13 +200,30 @@ class CSCHARM_PG_charm(bpy.types.PropertyGroup):
         default=0.0, soft_min=-50.0, soft_max=100.0, subtype="PERCENTAGE", update=_on_transform,
     )
     align: EnumProperty(name="Align", items=ALIGN_ITEMS, default="HANG", update=_on_transform)
+    rest_on_surface: BoolProperty(
+        name="Rest on Surface", default=True, update=_on_transform,
+        description="Settle on the object around the attachment point instead of passing through it",
+    )
+    # Resting pose found by ops/settle.py (charm axes in surface space) and
+    # the inputs it was solved for.
+    rest_x: FloatVectorProperty(size=3, default=(1.0, 0.0, 0.0), options={"HIDDEN"})
+    rest_z: FloatVectorProperty(size=3, default=(0.0, 0.0, 1.0), options={"HIDDEN"})
+    rest_key: StringProperty(options={"HIDDEN"})
 
     # Attachment / physics
+    surface: PointerProperty(name="Surface", type=bpy.types.Object,
+                             description="Object the charm was placed on (collisions, re-attaching)")
     target: PointerProperty(name="Target", type=bpy.types.Object)
     attach: EnumProperty(name="Attach", items=ATTACH_ITEMS, default="NONE")
     physics: BoolProperty(name="Physics", default=False, options={"HIDDEN"})
     physics_anchor: PointerProperty(type=bpy.types.Object)
     physics_pivot: PointerProperty(type=bpy.types.Object)
+    physics_collider: PointerProperty(type=bpy.types.Object)
+    physics_collide: BoolProperty(
+        name="Collide with Target", default=True,
+        description="The swinging charm collides with the object it hangs on, also when that "
+                    "object is animated (mesh collider, slower on dense meshes)",
+    )
 
 
 classes = (CSCHARM_PG_item, CSCHARM_PG_state, CSCHARM_PG_placement, CSCHARM_PG_charm)

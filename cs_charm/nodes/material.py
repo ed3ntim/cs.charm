@@ -63,9 +63,10 @@ def is_charm_material(mat):
     return mat is not None and utils.PROP_MATERIAL_KEY in mat
 
 
-def build_material(spec, name, pattern=0, liquid_range=None):
-    """Create a material for ``spec`` at ``pattern``. ``liquid_range``
-    (bottom, top) is the object-space Z range of the container for liquids.
+def build_material(spec, name, pattern=0, liquid_bounds=None):
+    """Create a material for ``spec`` at ``pattern``. ``liquid_bounds``
+    (min corner, max corner) is the object-space box of the container; it
+    places the liquid when the spec has no CS2 level values.
     Returns (material, warnings)."""
     warnings = []
     liquid = S.is_liquid(spec.shader)
@@ -126,12 +127,15 @@ def build_material(spec, name, pattern=0, liquid_range=None):
     mat[utils.PROP_MATERIAL_KEY] = spec.key
     mat[utils.PROP_MATERIAL_SPEC] = _spec_to_json(spec)
     if liquid:
-        if liquid_range:
-            main.inputs["Bottom"].default_value = liquid_range[0]
-            main.inputs["Top"].default_value = liquid_range[1]
-        # EEVEE: let the empty part of the container refract.
-        if hasattr(mat, "use_raytrace_refraction"):
-            mat.use_raytrace_refraction = True
+        if liquid_bounds:
+            for key, value in S.liquid_geometry_from_bounds(*liquid_bounds).items():
+                main.inputs[key].default_value = value
+        # The glass is see-through (Transparent BSDF): EEVEE needs the
+        # dithered render method and transparent shadows for that.
+        if hasattr(mat, "surface_render_method"):
+            mat.surface_render_method = "DITHERED"
+        if hasattr(mat, "use_transparent_shadow"):
+            mat.use_transparent_shadow = True
     apply_pattern(mat, spec, pattern)
     return mat, warnings
 

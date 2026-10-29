@@ -30,6 +30,12 @@ KIND_FLOAT = "FLOAT"
 KIND_COLOR = "COLOR"  # vector param -> RGBA input
 KIND_X = "X"          # first component of a vector param
 KIND_Y = "Y"          # second component
+KIND_POINT = "POINT"  # Source model-space point -> Blender object space (meters)
+KIND_RANGE = "RANGE"  # three Source distances (min, mid, max) -> meters
+
+# Source2Viewer exports models in meters with Source Y as Blender X:
+# Blender (x, y, z) = (y, -x, z) * SOURCE_UNIT for a Source model-space point.
+SOURCE_UNIT = 0.0254
 
 
 @dataclass(frozen=True)
@@ -83,7 +89,19 @@ LIQUID_BINDINGS = (
     Binding("g_flMaskMinimum", NODE_MAIN, "Mask Min"),
     Binding("g_flMaskMaximum", NODE_MAIN, "Mask Max"),
     Binding("g_vColorTint", NODE_MAIN, "Color Tint", KIND_COLOR),
+    Binding("g_flCubeRefractTransparency", NODE_MAIN, "Glass Transparency"),
+    Binding("g_flCubeRefractLiquidTransparency", NODE_MAIN, "Liquid Transparency"),
+    # Liquid surface: a point and three level ranges (empty, half, full) for
+    # the charm hanging upright, lying on its side and upside down.
+    Binding("g_flLiquidCenterOffset", NODE_MAIN, "Liquid Center", KIND_POINT),
+    Binding("g_vLiquidLevelUpwardsMinMidMax", NODE_MAIN, "Level Upright", KIND_RANGE),
+    Binding("g_vLiquidLevelSidewardsMinMidMax", NODE_MAIN, "Level Sideways", KIND_RANGE),
+    Binding("g_vLiquidLevelDownwardsMinMidMax", NODE_MAIN, "Level Upside Down", KIND_RANGE),
 )
+
+# Liquid inputs that describe the container geometry. Materials without
+# these parameters (demo and own liquids) get values from the mesh bounds.
+LIQUID_GEOMETRY_INPUTS = ("Liquid Center", "Level Upright", "Level Sideways", "Level Upside Down")
 
 # Texture slots per shader: compiled texture parameter -> (role, colorspace).
 # Roles are the image nodes' names inside the material ("TEX_<role>").
@@ -139,6 +157,11 @@ def texture_roles(shader):
     return LIQUID_TEXTURES if is_liquid(shader) else WEAPON_TEXTURES
 
 
+def srgb_to_linear(c):
+    c = max(0.0, float(c))
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
 def _component(value, index):
     if isinstance(value, (list, tuple)):
         return float(value[index]) if len(value) > index else 0.0
@@ -147,14 +170,37 @@ def _component(value, index):
 
 def _convert(value, kind):
     if kind == KIND_COLOR:
+        # Material color parameters are authored in sRGB; Blender's color
+        # sockets are scene linear.
         vec = list(value) if isinstance(value, (list, tuple)) else [value] * 3
         vec = [float(v) for v in vec[:3]] + [0.0] * (3 - len(vec[:3]))
-        return (vec[0], vec[1], vec[2], 1.0)
+        return (srgb_to_linear(vec[0]), srgb_to_linear(vec[1]), srgb_to_linear(vec[2]), 1.0)
     if kind == KIND_X:
         return _component(value, 0)
     if kind == KIND_Y:
         return _component(value, 1)
+    if kind == KIND_POINT:
+        x, y, z = (_component(value, i) for i in range(3))
+        return (y * SOURCE_UNIT, -x * SOURCE_UNIT, z * SOURCE_UNIT)
+    if kind == KIND_RANGE:
+        return tuple(_component(value, i) * SOURCE_UNIT for i in range(3))
     return _component(value, 0)
+
+
+def liquid_geometry_from_bounds(lo, hi):
+    """Liquid center and level ranges for a container without CS2 values:
+    the level runs linearly from the bottom to the top of the bounding box
+    (``lo``/``hi`` are object-space corners) in every orientation."""
+    center = tuple((a + b) / 2.0 for a, b in zip(lo, hi))
+    half_z = (hi[2] - lo[2]) / 2.0
+    half_side = max(hi[0] - lo[0], hi[1] - lo[1]) / 2.0
+    upright = (-half_z, 0.0, half_z)
+    return {
+        "Liquid Center": center,
+        "Level Upright": upright,
+        "Level Sideways": (-half_side, 0.0, half_side),
+        "Level Upside Down": upright,
+    }
 
 
 def _flag(params, name):

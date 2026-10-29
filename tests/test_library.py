@@ -281,7 +281,9 @@ class ShadingTest(unittest.TestCase):
         self.assertAlmostEqual(values[(S.NODE_MAIN, "Hue Shift")], 150.0)
         self.assertEqual(values[(S.NODE_MAIN, "Metal Min")], 0.2)
         self.assertEqual(values[(S.NODE_MAIN, "Metal Max")], 0.7)
-        self.assertEqual(values[(S.NODE_MAIN, "Color Tint")], (1.0, 0.5, 0.25, 1.0))
+        # sRGB parameters become linear socket values.
+        for got, want in zip(values[(S.NODE_MAIN, "Color Tint")], (1.0, 0.2140, 0.0509, 1.0)):
+            self.assertAlmostEqual(got, want, places=4)
         self.assertEqual(values[(S.NODE_MAIN, "Glitter Intensity")], 0.25)
         self.assertEqual(values[(S.NODE_GLITTER_UV, "Scale X")], 4.0)
         self.assertEqual(values[(S.NODE_MAIN, "Iridescence")], 0.0)  # F_IRIDESCENCE off
@@ -298,10 +300,25 @@ class ShadingTest(unittest.TestCase):
         values = S.node_values(spec, 99999)
         self.assertAlmostEqual(values[(S.NODE_MAIN, "Liquid Hue Shift")], 319.9968, places=3)
         self.assertAlmostEqual(values[(S.NODE_MAIN, "Fill Level")], 0.79965, places=4)
-        self.assertEqual(values[(S.NODE_MAIN, "Liquid Color")], (0.8, 0.078, 0.188, 1.0))
+        for got, want in zip(values[(S.NODE_MAIN, "Liquid Color")], (0.6038, 0.0069, 0.0295, 1.0)):
+            self.assertAlmostEqual(got, want, places=4)
         summary = dict(S.pattern_summary(spec, 99999))
         self.assertEqual(set(summary), {"Liquid Hue", "Fill Level"})
         self.assertEqual(S.format_value("Fill Level", summary["Fill Level"]), "80 %")
+
+    def test_liquid_geometry(self):
+        # Butane Buddy: Source inches, Source Y -> Blender X.
+        spec = self.spec(C.SHADER_LIQUID, {"g_flLiquidCenterOffset": [0.0, 0.6, -1.3, 0.0],
+                                           "g_vLiquidLevelUpwardsMinMidMax": [-0.7, 0.1, 0.8, 0.0]})
+        values = S.node_values(spec)
+        for got, want in zip(values[(S.NODE_MAIN, "Liquid Center")], (0.01524, 0.0, -0.03302)):
+            self.assertAlmostEqual(got, want, places=6)
+        for got, want in zip(values[(S.NODE_MAIN, "Level Upright")], (-0.01778, 0.00254, 0.02032)):
+            self.assertAlmostEqual(got, want, places=6)
+        geo = S.liquid_geometry_from_bounds((-0.01, -0.01, -0.04), (0.01, 0.01, -0.01))
+        self.assertEqual(set(geo), set(S.LIQUID_GEOMETRY_INPUTS))
+        self.assertAlmostEqual(geo["Liquid Center"][2], -0.025)
+        self.assertEqual(geo["Level Upright"], (-0.015, 0.0, 0.015))
 
     def test_detail_uv_vectors(self):
         spec = self.spec(C.SHADER_WEAPON, {"F_ENABLE_ADJUSTMENTS": 1}, {
