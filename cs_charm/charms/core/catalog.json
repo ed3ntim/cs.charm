@@ -1,0 +1,136 @@
+{
+ "version": 1,
+ "generator": "cs.charm tools/generate_demo_charms.py",
+ "note": "Demo charms made from scratch, no game assets.",
+ "charms": [
+  {
+   "id": "demo_gem_drop",
+   "name": "Demo Gem Drop",
+   "collection": "cs.charm Demo",
+   "rarity": "mythical",
+   "model": "demo/demo_gem_drop.glb",
+   "icon": "icons/demo_gem_drop.png",
+   "slots": {
+    "demo_chain": "demo/demo_chain.vmat",
+    "demo_gem": "demo/demo_gem_drop.vmat"
+   },
+   "tags": [
+    "demo",
+    "glitter"
+   ]
+  },
+  {
+   "id": "demo_fuel_flask",
+   "name": "Demo Fuel Flask",
+   "collection": "cs.charm Demo",
+   "rarity": "ancient",
+   "model": "demo/demo_fuel_flask.glb",
+   "icon": "icons/demo_fuel_flask.png",
+   "slots": {
+    "demo_chain": "demo/demo_chain.vmat",
+    "demo_flask": "demo/demo_fuel_flask.vmat"
+   },
+   "tags": [
+    "demo",
+    "liquid"
+   ]
+  }
+ ],
+ "materials": {
+  "demo/demo_chain.vmat": {
+   "shader": "csgo_weapon.vfx",
+   "textures": {
+    "g_tColor": "demo/demo_chain_color.png",
+    "g_tMetalness": "demo/demo_chain_metal.png",
+    "g_tNormal": "demo/demo_flat_normal.png"
+   },
+   "params": {
+    "g_vMetalnessRemapRange": [
+     0,
+     1,
+     0,
+     0
+    ],
+    "g_flModelTintAmount": 1,
+    "g_vColorTint": [
+     1,
+     1,
+     1,
+     0
+    ]
+   },
+   "dynamic": {}
+  },
+  "demo/demo_gem_drop.vmat": {
+   "shader": "csgo_weapon.vfx",
+   "textures": {
+    "g_tColor": "demo/demo_gem_color.png",
+    "g_tTintMask": "demo/demo_gem_tint.png",
+    "g_tMetalness": "demo/demo_gem_metal.png",
+    "g_tAmbientOcclusion": "demo/demo_gem_ao.png",
+    "g_tNormal": "demo/demo_flat_normal.png",
+    "g_tGlitterNormal": "demo/demo_glitter_normal.png"
+   },
+   "params": {
+    "F_ENABLE_ADJUSTMENTS": 1,
+    "F_TINT_MASK": 1,
+    "F_GLITTER": 1,
+    "F_ENABLE_SFX_MASK": 1,
+    "g_fHueShift": 0.0,
+    "g_fSaturation": 1.0,
+    "g_fBrightness": 1.0,
+    "g_fContrast": 1.0,
+    "g_fGlitterIntensity": 0.35,
+    "g_fGlitterScale": 3.0,
+    "g_fGlitterRainbowBalance": 0.0,
+    "g_fGlitterRainbowSpread": 0.6,
+    "g_vMetalnessRemapRange": [
+     0,
+     1,
+     0,
+     0
+    ],
+    "g_flModelTintAmount": 1,
+    "g_vColorTint": [
+     1,
+     1,
+     1,
+     0
+    ]
+   },
+   "dynamic": {
+    "g_fHueShift": "return lerp(-150,150,$KeychainSeed);",
+    "g_fSaturation": "return lerp(1,1.6,pow($KeychainSeed,3));",
+    "g_fGlitterRainbowBalance": "return $KeychainSeed;"
+   }
+  },
+  "demo/demo_fuel_flask.vmat": {
+   "shader": "csgo_simple_liquid.vfx",
+   "textures": {
+    "g_tColorA": "demo/demo_flask_color.png",
+    "g_tLiquidMask": "demo/demo_flask_mask.png",
+    "g_tNormalA": "demo/demo_flat_normal.png"
+   },
+   "params": {
+    "g_vLiquidColor": [
+     0.8,
+     0.078,
+     0.188,
+     0
+    ],
+    "g_flLiquidLevelHeight": 0.6,
+    "g_flLiquidBrightness": 2.0,
+    "g_flLiquidRoughness": 0.1,
+    "g_flBrightenEmptyArea": 0.2,
+    "g_flWaterLineStrength": 0.8,
+    "g_flLiquidInnerGlow": 0.0,
+    "g_flMaskMinimum": 0.0,
+    "g_flMaskMaximum": 1.0
+   },
+   "dynamic": {
+    "g_flLiquidColorHueShift": "return lerp(0,320,$KeychainSeed);",
+    "g_flLiquidLevelHeight": "return lerp(.45,.8,frac($KeychainSeed*100));"
+   }
+  }
+ }
+}

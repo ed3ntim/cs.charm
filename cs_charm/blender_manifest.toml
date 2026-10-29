@@ -1,0 +1,18 @@
+schema_version = "1.0.0"
+
+id = "cs_charm"
+version = "1.0.0"
+name = "cs.charm"
+tagline = "Spawn CS2 charms with their patterns and attach them to objects"
+maintainer = "ed3n <contact@ed3n.gallery>"
+type = "add-on"
+
+blender_version_min = "4.5.0"
+
+license = ["SPDX:PolyForm-Noncommercial-1.0.0"]
+copyright = ["2026 ed3n"]
+
+tags = ["Import-Export", "Object", "3D View"]
+
+[permissions]
+files = "Read charm models and textures from a user folder"
