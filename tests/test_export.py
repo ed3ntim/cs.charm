@@ -303,6 +303,22 @@ class BuildLibraryTest(unittest.TestCase):
             flask = cat.get(charms[1]["id"])
             self.assertTrue(any(m.is_liquid for m in flask.materials()))
 
+    def test_move_shared_model(self):
+        # Community charms share the blank model: moving it for the first
+        # one must not break the second.
+        with tempfile.TemporaryDirectory() as tmp:
+            raw, out = os.path.join(tmp, "raw"), os.path.join(tmp, "lib")
+            items, tokens = os.path.join(tmp, "items_game.txt"), os.path.join(tmp, "english.txt")
+            _write(items, ITEMS_GAME)
+            _write(tokens, TOKENS)
+            _fake_export(raw)
+            defs, packs = X.load_items(items)
+            defs["9"] = dict(defs["3"])
+            charms, _skipped, _warnings = X.build_library(out, raw, defs, X.load_tokens(tokens), packs, move=True)
+            shared = [c["model"] for c in charms if "kc_blank" in c["model"]]
+            self.assertEqual(shared, ["workshop_blanks/kc_blank.glb"] * 2)
+            self.assertTrue(os.path.isfile(os.path.join(out, shared[0])))
+
 
 if __name__ == "__main__":
     unittest.main()

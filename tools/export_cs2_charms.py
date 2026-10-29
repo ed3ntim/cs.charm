@@ -437,10 +437,12 @@ def build_library(out, raw, defs, tokens, packs, move=False):
         group = charm.pop("_group")
         glb = charm["model"]
         # The glb references its textures by file name: keep them next to it.
-        for uri in _image_uris(glb):
-            src = os.path.join(os.path.dirname(glb), uri)
-            if os.path.isfile(src):
-                place(src, group)
+        # Charms sharing a model: it may already be moved, its textures too.
+        if os.path.normcase(os.path.abspath(glb)) not in copied:
+            for uri in _image_uris(glb):
+                src = os.path.join(os.path.dirname(glb), uri)
+                if os.path.isfile(src):
+                    place(src, group)
         charm["model"] = place(glb, group)
         if charm["icon"]:
             charm["icon"] = place(charm["icon"], ICON_DIR)
