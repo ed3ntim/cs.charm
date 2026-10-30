@@ -9,7 +9,7 @@ Target: Blender 5.2, compatible back to 4.5.
 
 **For plugin excluding the charm assets (CS2 export required) [⬇ Download cs_charm.zip (latest release)](https://github.com/ed3ntim/cs.charm/releases/latest/download/cs_charm.zip)**
 
-**For the version including all charm assets visit my page [⬇ Download cs_charm-1.2.0 - all charms.zip](https://ed3n.gallery/apps/cs-charm/)**
+**For the version including all charm assets visit my page [⬇ Download cs_charm-1.3.0 - all charms.zip](https://ed3n.gallery/apps/cs-charm/)**
 
 ## Installation
 
@@ -68,10 +68,15 @@ game installation (see [CS2 charms](#cs2-charms)).
 
 ### Physics
 
-*Add Physics* turns the charm into an active rigid body (convex hull)
-that hangs from a small passive anchor through a Point constraint. The
-anchor is parented to the target, so moving or animating the weapon makes
-the charm swing. Play the timeline or bake the rigid body cache to see it.
+*Add Physics* turns the charm into an active rigid body that hangs from
+a small passive anchor through a ball joint (Generic Spring constraint; a
+weak spring damps the turn around the hanging axis, like the friction of
+the ring). A hidden "<charm> Weight" fixed to it puts the center of mass
+into the charm, so gravity really makes it swing, and carries the
+collision hull of the body without ring and chain. The anchor is parented
+to the target, so moving or animating the weapon makes the charm swing.
+A new rigid body world runs faster in scenes whose charms are scaled up
+(e.g. weapons in inches), which equals real gravity for the charm. Play the timeline or bake the rigid body cache to see it.
 Rigid bodies ignore parenting, so the charm itself is detached while
 physics is on; *Remove Physics* restores the rest pose and the previous
 attachment.
@@ -80,11 +85,12 @@ With *Collide with Target* (default) the charm also collides with the
 weapon, including while the weapon is animated: a hidden passive
 "<target> Collider" object shares the target's mesh and follows it, one
 per target for all its charms. The weapon itself stays untouched. At the
-start the charm rests as its convex hull (what the simulation uses), and
-it may then shift into the pose physics finds most stable, e.g. into the
-corner between magazine and receiver. Dense meshes make the simulation
-slower; turn the option off before *Add Physics* if the charm hangs
-freely anyway.
+start the charm rests in the simulation's own balance: *Add Physics*
+simulates a moment with all animation frozen and takes that pose as the
+start, so nothing twitches when the timeline starts (skipped for a charm
+swung on purpose with tilt or lean). On dense weapon meshes this takes a
+few seconds. Dense meshes also make the simulation slower; turn the
+option off before *Add Physics* if the charm hangs freely anyway.
 
 ## CS2 charms
 

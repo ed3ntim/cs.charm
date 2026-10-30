@@ -8,7 +8,7 @@ import os
 import unittest
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 from cs_charm import utils
 from cs_charm.library import registry
@@ -408,7 +408,11 @@ class PhysicsTest(CharmTestCase):
         pivot = obj.cs_charm.physics_pivot
         self.assertEqual(anchor.parent, target)
         self.assertTrue(anchor.rigid_body.kinematic)
-        self.assertEqual(pivot.rigid_body_constraint.type, "POINT")
+        con = pivot.rigid_body_constraint
+        self.assertEqual(con.type, "GENERIC_SPRING")
+        self.assertTrue(all(getattr(con, f"use_limit_lin_{a}") for a in "xyz"))
+        self.assertFalse(con.use_spring_ang_x or con.use_spring_ang_y)  # swings freely
+        self.assertTrue(con.use_spring_ang_z)
         self.assertEqual(pivot.rigid_body_constraint.object2, obj)
         self.assertIsNone(target.rigid_body_constraint)  # not on whatever was active
 
@@ -428,11 +432,133 @@ class PhysicsTest(CharmTestCase):
         self.assertEqual(obj.parent, target)
         self.assertNotIn(anchor, list(bpy.data.objects))
 
+    def test_gravity_swings_back(self):
+        # The origin (center of mass for Bullet) is the attachment point:
+        # without the weight a tilted charm would stay tilted.
+        scene = bpy.context.scene
+        target = _cube()
+        obj = self.spawn(self.flask)
+        self.settings.attach = "PARENT"
+        P.place(obj, Vector((0, -0.5, 0)), Vector((0, -1, 0)), self.settings, target)
+        obj.cs_charm.lean = math.radians(40)
+        obj.cs_charm.physics_collide = False
+        bpy.context.view_layer.update()
+        physics.add_physics(bpy.context, obj)
+
+        def tilt():
+            up = obj.matrix_world.to_3x3() @ Vector((0, 0, 1))
+            return math.degrees(up.angle(Vector((0, 0, 1))))
+
+        scene.frame_set(scene.frame_start)
+        start = tilt()
+        least = start
+        for f in range(scene.frame_start, scene.frame_start + 30):
+            scene.frame_set(f)
+            least = min(least, tilt())
+        scene.frame_set(scene.frame_start)
+        self.assertGreater(start, 30)
+        self.assertLess(least, 0.7 * start)  # without the weight it stays at the start
+
+    def _steps(self, obj, frames):
+        scene = bpy.context.scene
+        scene.frame_set(scene.frame_start)
+        prev, steps = obj.matrix_world.to_quaternion(), []
+        for f in range(scene.frame_start + 1, scene.frame_start + frames):
+            scene.frame_set(f)
+            q = obj.matrix_world.to_quaternion()
+            steps.append(math.degrees(prev.rotation_difference(q).angle))
+            prev = q
+        scene.frame_set(scene.frame_start)
+        return steps
+
+    def _resting_flask(self, settle):
+        target = _cube(size=1.0)
+        self.settings.attach = "PARENT"
+        obj = self.spawn(self.gem)
+        # On the cube's edge: the charm rests on the top and hangs over it.
+        P.place(obj, Vector((0.0, -0.49, 0.5)), Vector((0, -0.3, 1)).normalized(), self.settings, target)
+        start = bpy.context.scene.frame_start
+        target.keyframe_insert("location", frame=start)
+        target.location.z = 0.2
+        target.keyframe_insert("location", frame=start + 200)  # slow: hardly moves in 15 frames
+        bpy.context.scene.frame_set(start)
+        bpy.context.view_layer.update()
+        physics.add_physics(bpy.context, obj, settle=settle)
+        return obj
+
+    def test_starts_at_rest(self):
+        obj = self._resting_flask(settle=True)
+        self.assertLess(max(self._steps(obj, 15)), 0.5)
+        # The animation frozen while settling is back.
+        target = obj.cs_charm.target
+        self.assertIsNotNone(target.animation_data.action)
+        bpy.context.scene.frame_set(bpy.context.scene.frame_start + 200)
+        self.assertAlmostEqual(target.location.z, 0.2, places=4)
+        bpy.context.scene.frame_set(bpy.context.scene.frame_start)
+
+    def test_weight_carries_the_body(self):
+        target = _cube(size=1.0)
+        self.settings.attach = "PARENT"
+        obj = self.spawn(self.gem)
+        P.place(obj, Vector((0.2, 0, 0.5)), Vector((0, 0, 1)), self.settings, target)
+        physics.add_physics(bpy.context, obj)
+        weight = obj.cs_charm.physics_weight
+        self.assertIsNotNone(weight)
+        self.assertGreater(weight.rigid_body.mass, obj.rigid_body.mass)
+        con = weight.rigid_body_constraint
+        self.assertEqual(con.type, "FIXED")
+        self.assertEqual({con.object1, con.object2}, {obj, weight})
+        # The body collides in place of the charm.
+        self.assertEqual(weight.rigid_body.collision_shape, "CONVEX_HULL")
+        self.assertTrue(weight.rigid_body.collision_collections[0])
+        self.assertFalse(obj.rigid_body.collision_collections[0])
+        # On the hanging axis (model Z), where the rest pose expects it.
+        local = obj.matrix_world.inverted() @ weight.matrix_world.translation
+        self.assertLess(Vector((local.x, local.y)).length, 1e-5)
+        self.assertLess(local.z, 0.0)
+        name, mesh = weight.name, weight.data.name
+        physics.remove_physics(bpy.context, obj)
+        self.assertNotIn(name, bpy.data.objects)
+        self.assertNotIn(mesh, bpy.data.meshes)
+        self.assertEqual(obj.rigid_body, None)
+
+    def test_body_leaves_out_ring(self):
+        # Ring part around the attachment point, body part further down.
+        import bmesh
+        bm = bmesh.new()
+        bmesh.ops.create_cube(bm, size=0.004)
+        ring = list(bm.verts)
+        bmesh.ops.create_cube(bm, size=0.02, matrix=Matrix.Translation((0, 0, -0.03)))
+        mesh = bpy.data.meshes.new("Two Parts")
+        bm.to_mesh(mesh)
+        bm.free()
+        obj = bpy.data.objects.new("Two Parts", mesh)
+        bpy.context.collection.objects.link(obj)
+        body = physics._body_mesh(obj)
+        center = physics._local_center(obj)
+        lowest_ring = min(v.co.z for v in mesh.vertices[:len(ring)])
+        self.assertEqual(len(body.vertices), 8)
+        self.assertTrue(all(v.co.z + center.z < lowest_ring for v in body.vertices))
+        bpy.data.objects.remove(obj)
+        bpy.data.meshes.remove(body)
+        bpy.data.meshes.remove(mesh)
+
+    def test_world_time_scale(self):
+        scene = bpy.context.scene
+        if scene.rigidbody_world is not None:
+            bpy.ops.rigidbody.world_remove()
+        world = physics.ensure_world(bpy.context, 4.0)
+        self.assertAlmostEqual(world.time_scale, 2.0, places=5)
+        self.assertGreaterEqual(world.solver_iterations, 60)
+        world.time_scale = 1.5  # an existing world is left as it is
+        self.assertAlmostEqual(physics.ensure_world(bpy.context, 39.37).time_scale, 1.5, places=5)
+
     def test_delete_charm(self):
         obj = self.spawn(self.gem)
         P.place(obj, Vector(), Vector((0, -1, 0)), self.settings)
         physics.add_physics(bpy.context, obj)
-        helpers = [obj.cs_charm.physics_anchor.name, obj.cs_charm.physics_pivot.name]
+        helpers = [obj.cs_charm.physics_anchor.name, obj.cs_charm.physics_pivot.name,
+                   obj.cs_charm.physics_weight.name]
         physics.delete_charm(bpy.context, obj)
         for name in helpers:
             self.assertNotIn(name, bpy.data.objects)
@@ -555,6 +681,7 @@ class DuplicateTest(CharmTestCase):
         for o in (copy, linked):
             self.assertFalse(o.cs_charm.physics)
             self.assertIsNone(o.rigid_body)
+            self.assertIsNone(o.cs_charm.physics_weight)
         self.assertTrue(obj.cs_charm.physics)
         self.assertIn(obj.cs_charm.physics_anchor, list(bpy.data.objects))
         self.assertNotIn(utils.PROP_MODEL, copy.data)

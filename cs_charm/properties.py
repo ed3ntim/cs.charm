@@ -218,6 +218,7 @@ class CSCHARM_PG_charm(bpy.types.PropertyGroup):
     physics: BoolProperty(name="Physics", default=False, options={"HIDDEN"})
     physics_anchor: PointerProperty(type=bpy.types.Object)
     physics_pivot: PointerProperty(type=bpy.types.Object)
+    physics_weight: PointerProperty(type=bpy.types.Object)
     physics_collider: PointerProperty(type=bpy.types.Object)
     physics_collide: BoolProperty(
         name="Collide with Target", default=True,

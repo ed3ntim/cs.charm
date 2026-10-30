@@ -59,7 +59,7 @@ def make_unique(context=None):
         if state.physics_anchor is not None and state.physics_anchor in helpers:
             _drop_shared_physics(context, obj)
             touched = True
-        for helper in (state.physics_anchor, state.physics_pivot):
+        for helper in (state.physics_anchor, state.physics_pivot, state.physics_weight):
             if helper is not None:
                 helpers.add(helper)
         if touched:
@@ -73,6 +73,7 @@ def _drop_shared_physics(context, obj):
     state = obj.cs_charm
     state.physics_anchor = None
     state.physics_pivot = None
+    state.physics_weight = None
     physics.remove_physics(context, obj)
 
 

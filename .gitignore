@@ -45,3 +45,6 @@ promo/out/
 # Source2Viewer download / raw exports
 _tools/
 _raw/
+
+# Promo renders and the source scene (contain Valve assets)
+promo/out/
