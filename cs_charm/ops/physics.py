@@ -336,58 +336,93 @@ def add_physics(context, obj, settle=True):
     # target space so editing the placement still works.
     state.target, state.attach = keep_target, keep_mode
     P.store_anchor(obj, anchor_w, _normal)
-    if settle:
-        settle_start(context, [obj])
+    settle_start(context, [obj], settle=settle)
     return anchor
 
 
 def _frozen_animation(scene):
-    """Detach every action in ``scene`` (objects keep their current pose);
-    returns a function that puts them back."""
+    """Stop all animation in ``scene`` except on rigid bodies: actions are
+    detached and NLA tracks switched off, objects keep their current pose.
+    Returns a function that puts everything back."""
     frozen = []
     for o in scene.objects:
         ad = o.animation_data
-        if ad is not None and ad.action is not None and o.rigid_body is None:
-            frozen.append((o, ad.action, getattr(ad, "action_slot", None)))
-            ad.action = None
+        if ad is None or o.rigid_body is not None or ad.use_tweak_mode:
+            continue
+        frozen.append((o, ad.action, getattr(ad, "action_slot", None), ad.use_nla))
+        ad.action = None
+        ad.use_nla = False
 
     def restore():
-        for o, action, slot in frozen:
-            o.animation_data.action = action
-            if slot is not None and o.animation_data.action_slot != slot:
-                o.animation_data.action_slot = slot
+        for o, action, slot, use_nla in frozen:
+            ad = o.animation_data
+            ad.use_nla = use_nla
+            if action is not None:
+                ad.action = action
+                if slot is not None and ad.action_slot != slot:
+                    ad.action_slot = slot
     return restore
 
 
-def settle_start(context, charms, frames=SETTLE_FRAMES):
-    """Start charms at rest in the simulation's balance. The rest pose of
-    the placement is close, but contact and the real center of mass differ
-    a little, and the charm would twitch in the first frames. Simulates
-    ``frames`` frames with all animation frozen at the first frame and
-    takes the end pose as the start. Charms swung on purpose (tilt or
-    lean) are left alone."""
+def _bodies(charms):
+    return charms + [o.cs_charm.physics_weight for o in charms if o.cs_charm.physics_weight is not None]
+
+
+def settle_start(context, charms, frames=SETTLE_FRAMES, settle=True):
+    """Set up the first frame of the simulation for charms placed at the
+    current frame, then simulate up to the current frame again.
+
+    The simulation starts at the cache's first frame. An animated target
+    can be somewhere else there, so the charms move along with their
+    anchor; otherwise they start where the target was when placing and
+    get pulled across the scene.
+
+    With ``settle`` charms start at rest in the simulation's balance: the
+    rest pose of the placement is close, but contact and the real center
+    of mass differ a little, and the charm would twitch in the first
+    frames. Simulates ``frames`` frames with all animation frozen at the
+    first frame and takes the end pose as the start. Charms swung on
+    purpose (tilt or lean) are not settled."""
     scene = context.scene
     world = scene.rigidbody_world
-    charms = [o for o in charms if has_physics(o) and o.cs_charm.tilt == 0.0 and o.cs_charm.lean == 0.0]
+    charms = [o for o in charms if has_physics(o)]
     if world is None or not charms or world.point_cache.is_baked:
         return
-    bodies = charms + [o.cs_charm.physics_weight for o in charms if o.cs_charm.physics_weight is not None]
     cache = world.point_cache
     current, start, end = scene.frame_current, cache.frame_start, cache.frame_end
-    restore = _frozen_animation(scene)
-    try:
-        cache.frame_end = start + frames
-        scene.frame_set(start)
-        for f in range(start + 1, start + frames + 1):
-            scene.frame_set(f)
-        rest = [(o, o.matrix_world.copy()) for o in bodies]
-    finally:
-        cache.frame_end = end
-        restore()
-        scene.frame_set(start)
-    for o, m in rest:
-        o.matrix_world = m
+    context.view_layer.update()  # new helpers have no world matrix yet
+    held = []
+    for o in charms:
+        anchor = o.cs_charm.physics_anchor
+        if anchor is not None:
+            to_anchor = anchor.matrix_world.inverted_safe()
+            held += [(b, anchor, to_anchor @ b.matrix_world) for b in _bodies([o])]
+    scene.frame_set(start)
+    for body, anchor, relative in held:
+        body.matrix_world = anchor.matrix_world @ relative
+
+    still = [o for o in charms if o.cs_charm.tilt == 0.0 and o.cs_charm.lean == 0.0] if settle else []
+    if still:
+        restore = _frozen_animation(scene)
+        try:
+            cache.frame_end = start + frames
+            scene.frame_set(start)
+            for f in range(start + 1, start + frames + 1):
+                scene.frame_set(f)
+            rest = [(o, o.matrix_world.copy()) for o in _bodies(still)]
+        finally:
+            cache.frame_end = end
+            restore()
+            scene.frame_set(start)
+        for o, m in rest:
+            o.matrix_world = m
     world.time_scale = world.time_scale  # resets the simulation cache
+    # Rigid bodies only simulate frame by frame: jumping back to the
+    # current frame would show the charms at their start pose. The reset
+    # world has to be rebuilt at the first frame (Bullet finds no hull
+    # vertices otherwise).
+    for f in range(start, min(current, end) + 1):
+        scene.frame_set(f)
     scene.frame_set(current)
 
 

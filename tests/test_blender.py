@@ -616,6 +616,80 @@ class PhysicsTest(CharmTestCase):
         physics.add_physics(bpy.context, obj)
         self.assertIsNone(obj.cs_charm.physics_collider)
 
+    def _placed_mid_animation(self, nla):
+        """Charm placed at frame 50 on a target that moves 2 m from the
+        first frame on (#20: it started where the target was at frame 50
+        and was pulled across the scene, or vanished right away with NLA)."""
+        scene = bpy.context.scene
+        start = scene.frame_start
+        target = _cube(size=1.0)
+        target.keyframe_insert("location", frame=start)
+        target.location.x = 2.0
+        target.keyframe_insert("location", frame=start + 100)
+        if nla:
+            ad = target.animation_data
+            ad.nla_tracks.new().strips.new("move", start, ad.action)
+            ad.action = None
+        scene.frame_set(start + 49)
+        self.settings.attach = "PARENT"
+        obj = self.spawn(self.flask)
+        x = target.matrix_world.translation.x
+        P.place(obj, Vector((x, -0.5, 0)), Vector((0, -1, 0)), self.settings, target)
+        bpy.context.view_layer.update()
+        physics.add_physics(bpy.context, obj)
+        return obj
+
+    def _assert_follows(self, obj):
+        scene = bpy.context.scene
+        anchor = obj.cs_charm.physics_anchor
+
+        def gap():
+            return (obj.matrix_world.translation - anchor.matrix_world.translation).length
+
+        self.assertEqual(scene.frame_current, scene.frame_start + 49)
+        self.assertLess(gap(), 0.002)
+        for f in range(scene.frame_start, scene.frame_start + 60):
+            scene.frame_set(f)
+            self.assertLess(gap(), 0.002, f"frame {f}")
+        scene.frame_set(scene.frame_start)
+
+    def test_placed_mid_animation(self):
+        obj = self._placed_mid_animation(nla=False)
+        self._assert_follows(obj)
+
+    def test_placed_mid_nla_animation(self):
+        obj = self._placed_mid_animation(nla=True)
+        self._assert_follows(obj)
+        self.assertTrue(obj.cs_charm.target.animation_data.use_nla)  # unfrozen again
+
+    def test_mirrored_target(self):
+        # Negative scale made the rest pose search sample with ~0 spacing
+        # (MemoryError).
+        target = _cube(size=1.0)
+        target.scale = (-1, 1, 1)
+        bpy.context.view_layer.update()
+        obj = self.spawn(self.flask)
+        self.settings.attach = "PARENT"
+        P.place(obj, Vector((0, -0.5, 0)), Vector((0, -1, 0)), self.settings, target)
+        physics.add_physics(bpy.context, obj)
+        self.assertTrue(obj.cs_charm.physics)
+
+
+class SurfaceTest(CharmTestCase):
+    def test_points_near_samples_only_the_neighborhood(self):
+        # A 100 m cube with a 3 cm charm: sampling every edge at charm
+        # spacing took seconds (and much longer in scenes in millimeters).
+        from cs_charm.ops import settle
+        target = _cube(size=100.0)
+        surface = settle.Surface(target, bpy.context.evaluated_depsgraph_get())
+        center = Vector((50.0, -50.0, 0.0))  # middle of an edge
+        points = surface.points_near(center, 0.03, 0.03 / 25.0)
+        self.assertLess(len(points), 200)
+        self.assertGreater(len(points), 40)  # along the edge through the sphere
+        self.assertTrue(all(Vector(p).length <= 0.03 * 1.02 for p in points - tuple(center)))
+        corner = surface.points_near(Vector((50.0, 50.0, 50.0)), 0.03, 0.03 / 25.0)
+        self.assertIn((50.0, 50.0, 50.0), [tuple(p) for p in corner])
+
 
 class SceneTest(CharmTestCase):
     def tearDown(self):

@@ -31,7 +31,6 @@ import bmesh
 import numpy as np
 from mathutils import Matrix, Vector
 from mathutils.bvhtree import BVHTree
-from mathutils.kdtree import KDTree
 
 WORLD_UP = Vector((0.0, 0.0, 1.0))
 HULL_DIRECTIONS = 96     # support directions for the hull sample points
@@ -163,56 +162,57 @@ class Surface:
         self.matrix = obj.matrix_world.copy()
         self.inverse = self.matrix.inverted_safe()
         self.depsgraph = depsgraph
-        self._samples = {}
+        self._arrays = None
 
     def points_near(self, center_w, radius_w, spacing_w):
         """World points of the object within ``radius_w`` of ``center_w``:
-        vertices plus points along the edges, at most ``spacing_w`` apart."""
-        scale = max(self.matrix.to_scale()) or 1.0
-        spacing = spacing_w / scale
-        key = round(math.log(max(spacing, 1e-9), 1.25))
-        tree = self._samples.get(key)
-        if tree is None:
-            tree = self._build_samples(1.25 ** key)
-            self._samples[key] = tree
-        found = tree.find_range(self.inverse @ Vector(center_w), radius_w / scale * 1.01)
-        if not found:
-            return np.zeros((0, 3))
-        local = np.array([tuple(co) for co, _i, _d in found])
-        m = np.array(self.matrix)
-        return local @ m[:3, :3].T + m[:3, 3]
-
-    def _build_samples(self, spacing):
-        evaluated = self.obj.evaluated_get(self.depsgraph)
-        mesh = evaluated.to_mesh()
-        try:
-            count = len(mesh.vertices)
-            co = np.empty(count * 3)
-            mesh.vertices.foreach_get("co", co)
-            co = co.reshape(count, 3)
-            edges = np.empty(len(mesh.edges) * 2, dtype=np.int64)
-            mesh.edges.foreach_get("vertices", edges)
-            edges = edges.reshape(-1, 2)
-        finally:
-            evaluated.to_mesh_clear()
+        vertices plus points along the edges, at most ``spacing_w`` apart.
+        Only edges that pass the sphere are sampled: the spacing follows the
+        charm, so sampling the whole target took millions of points (and
+        seconds) on large weapons or in scenes in centimeters."""
+        # Negative scales (mirrored targets) come back from to_scale() too.
+        scale = max(abs(s) for s in self.matrix.to_scale()) or 1.0
+        spacing = max(spacing_w / scale, 1e-9)
+        radius = radius_w / scale * 1.01
+        center = np.array(tuple(self.inverse @ Vector(center_w)))
+        co, edges = self._mesh_arrays()
+        pieces = [co[np.linalg.norm(co - center, axis=1) <= radius]]
         a, b = co[edges[:, 0]], co[edges[:, 1]]
-        steps = np.maximum(1, np.ceil(np.linalg.norm(b - a, axis=1) / spacing).astype(np.int64))
-        long = steps > 1
-        pieces = [co]
+        ab = b - a
+        length2 = np.maximum((ab * ab).sum(axis=1), 1e-30)
+        t = np.clip(((center - a) * ab).sum(axis=1) / length2, 0.0, 1.0)
+        passing = np.linalg.norm(a + ab * t[:, None] - center, axis=1) <= radius
+        steps = np.ceil(np.sqrt(length2) / spacing).astype(np.int64)
+        long = passing & (steps > 1)
         if long.any():
             # Interior points k / n (k = 1 .. n-1) of every long edge.
-            a, b, n = a[long], b[long], steps[long]
+            a, ab, n = a[long], ab[long], steps[long]
             edge = np.repeat(np.arange(len(n)), n - 1)
             first = np.repeat(np.cumsum(n - 1) - (n - 1), n - 1)
             k = np.arange(len(edge)) - first + 1
-            t = (k / n[edge])[:, None]
-            pieces.append(a[edge] + (b[edge] - a[edge]) * t)
-        pts = np.concatenate(pieces)
-        tree = KDTree(len(pts))
-        for i, p in enumerate(pts):
-            tree.insert(p, i)
-        tree.balance()
-        return tree
+            inner = a[edge] + ab[edge] * (k / n[edge])[:, None]
+            pieces.append(inner[np.linalg.norm(inner - center, axis=1) <= radius])
+        local = np.concatenate(pieces)
+        if not len(local):
+            return np.zeros((0, 3))
+        m = np.array(self.matrix)
+        return local @ m[:3, :3].T + m[:3, 3]
+
+    def _mesh_arrays(self):
+        """Vertex coordinates (local) and edge indices of the evaluated mesh."""
+        if self._arrays is None:
+            evaluated = self.obj.evaluated_get(self.depsgraph)
+            mesh = evaluated.to_mesh()
+            try:
+                count = len(mesh.vertices)
+                co = np.empty(count * 3)
+                mesh.vertices.foreach_get("co", co)
+                edges = np.empty(len(mesh.edges) * 2, dtype=np.int64)
+                mesh.edges.foreach_get("vertices", edges)
+            finally:
+                evaluated.to_mesh_clear()
+            self._arrays = (co.reshape(count, 3), edges.reshape(-1, 2))
+        return self._arrays
 
     def blocked(self, origin_w, points_w, tol):
         """True if a segment from ``origin_w`` to any point hits the object

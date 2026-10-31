@@ -14,7 +14,7 @@ legacy add-on (bl_info). Sub-packages:
 bl_info = {
     "name": "cs.charm",
     "author": "ed3n",
-    "version": (1, 3, 0),
+    "version": (1, 3, 1),
     "blender": (4, 5, 0),
     "location": "3D Viewport > Sidebar > cs.charm",
     "description": "Spawn CS2 charms with their patterns applied and attach them to objects",
