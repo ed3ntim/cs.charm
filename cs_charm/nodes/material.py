@@ -9,6 +9,10 @@ Layout of a charm material::
             └─ CHARM_GLITTER_UV ─ TEX_GLITTER     ─┼─ CHARM_MAIN ── Output
                                                    ┘
 
+Materials with F_OPAQUE_REFRACT get CHARM_GLASS ("CS2 Charm Glass")
+between CHARM_MAIN and the output; the Sticker Slab (F_STICKERS) mixes
+its sticker in before the glass (nodes/slab.py).
+
 CHARM_MAIN is the "CS2 Charm Weapon" or "CS2 Charm Liquid" group. Static
 parameters and the pattern's DynamicParams are written to the group inputs
 through library/shading.py. A JSON copy of the spec is stored on the
@@ -26,6 +30,9 @@ from ..library import shading as S
 from . import groups
 
 _TEX_PREFIX = "TEX_"
+# Item inputs of the material's DynamicParams (e.g. $sticker_rarity_color),
+# JSON on the material so pattern changes keep them.
+PROP_ENV = "cs_charm_env"
 
 
 def _load_image(path, colorspace):
@@ -83,7 +90,17 @@ def build_material(spec, name, pattern=0, liquid_bounds=None):
     main.node_tree = groups.ensure_group("LIQUID" if liquid else "WEAPON")
     main.location = (350, 0)
     main.width = 240
-    links.new(main.outputs[0], out.inputs["Surface"])
+    glass = None
+    if not liquid and spec.flag("F_OPAQUE_REFRACT"):
+        glass = nodes.new("ShaderNodeGroup")
+        glass.name = glass.label = S.NODE_GLASS
+        glass.node_tree = groups.ensure_group("GLASS")
+        glass.location = (550, 0)
+        out.location = (850, 0)
+        links.new(main.outputs[0], glass.inputs["Shader"])
+        links.new(glass.outputs[0], out.inputs["Surface"])
+    else:
+        links.new(main.outputs[0], out.inputs["Surface"])
 
     uv = nodes.new("ShaderNodeUVMap")
     uv.location = (-900, 0)
@@ -122,10 +139,23 @@ def build_material(spec, name, pattern=0, liquid_bounds=None):
             tex.interpolation = "Closest"  # crisp flakes
         else:
             links.new(uv.outputs[0], tex.inputs["Vector"])
+        if role == "REFRACT":
+            if glass is not None:
+                sep = nodes.new("ShaderNodeSeparateColor")
+                sep.location = (-100, tex.location.y)
+                links.new(tex.outputs["Color"], sep.inputs[0])
+                links.new(sep.outputs[0], glass.inputs["Refract Mask"])
+            continue
         _wire_texture(links, tex, role, main, liquid)
 
     mat[utils.PROP_MATERIAL_KEY] = spec.key
     mat[utils.PROP_MATERIAL_SPEC] = _spec_to_json(spec)
+    if glass is not None:
+        # The rim is see-through (Transparent BSDF) like the liquid glass.
+        if hasattr(mat, "surface_render_method"):
+            mat.surface_render_method = "DITHERED"
+        if hasattr(mat, "use_transparent_shadow"):
+            mat.use_transparent_shadow = True
     if liquid:
         if liquid_bounds:
             for key, value in S.liquid_geometry_from_bounds(*liquid_bounds).items():
@@ -163,12 +193,31 @@ def _wire_texture(links, tex, role, main, liquid):
         links.new(tex.outputs["Color"], inputs["Liquid Mask"])
 
 
+def material_env(mat):
+    """Item inputs stored on the material ({"$name": value}), tuples restored."""
+    raw = mat.get(PROP_ENV) if mat else None
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    return {k: tuple(v) if isinstance(v, list) else v for k, v in data.items()}
+
+
+def set_material_env(mat, env):
+    if env:
+        mat[PROP_ENV] = json.dumps(env)
+    elif PROP_ENV in mat:
+        del mat[PROP_ENV]
+
+
 def apply_pattern(mat, spec, pattern):
     """Write static params + the pattern's dynamic params to the nodes."""
     nodes = mat.node_tree.nodes if mat and mat.node_tree else None
     if nodes is None:
         return
-    for (node_name, input_name), value in S.node_values(spec, pattern).items():
+    for (node_name, input_name), value in S.node_values(spec, pattern, material_env(mat)).items():
         node = nodes.get(node_name)
         if node is None:
             continue
@@ -194,5 +243,5 @@ def parameter_nodes(mat):
     """Nodes whose inputs the Active Charm panel shows, in display order."""
     if mat is None or mat.node_tree is None:
         return []
-    names = (S.NODE_MAIN, S.NODE_DETAIL_UV, S.NODE_GLITTER_UV)
+    names = (S.NODE_MAIN, S.NODE_DETAIL_UV, S.NODE_GLITTER_UV, S.NODE_GLASS)
     return [mat.node_tree.nodes[n] for n in names if n in mat.node_tree.nodes]

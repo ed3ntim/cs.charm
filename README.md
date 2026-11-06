@@ -19,9 +19,9 @@ Target: Blender 5.2, compatible back to 4.5.
    and pick the zip (drag & drop onto the Blender window works too).
 3. 3D Viewport sidebar (`N`), tab **cs.charm**.
 
-The add-on ships with two demo charms (one with the standard charm shader,
-one liquid charm). To use the real CS2 charms, export them from your own
-game installation (see [CS2 charms](#cs2-charms)).
+The add-on ships without charms: export the CS2 charms from your own game
+installation (see [CS2 charms](#cs2-charms)) and set the folder as
+*Charm Library Folder* in the add-on preferences.
 
 ## Usage
 
@@ -65,6 +65,29 @@ game installation (see [CS2 charms](#cs2-charms)).
    Parameters* exposes every input of the charm node groups.
    Duplicated charms (Shift+D, Alt+D) get their own mesh, materials and
    physics right away, so editing one copy never changes the others.
+
+### Sticker Slab
+
+The Sticker Slab is a charm with a sticker sealed inside. Select it in the
+library and a sticker picker appears below (search, collection, finish,
+rarity, preview); new slabs get the picked sticker.
+
+- The sticker keeps its finish (Paper, Glitter, Holo, Foil, Gold,
+  Lenticular, Embroidered), shaded with the same node groups as cs.sticker.
+- The label frame takes the sticker's rarity color, the label shows
+  `COUNTER-STRIKE 2`, `MINT GRADED STICKER`, the sticker name with its
+  event (`Titan (Holo) | Katowice 2015`) and the sticker's kit id from the
+  game as 10-digit serial number (`0000000343`), also for stickers
+  without an event. Long names shrink to fit.
+- *Active Charm > Sticker Slab*: put another sticker in (*Use Picked
+  Sticker*), wear (0 = like the game, which has no wear on slabbed
+  stickers), your own label text and a custom label color.
+
+Stickers come from a cs.sticker library: set *Sticker Library* in the
+add-on preferences to a folder with a `catalog.json` (for example the
+output of cs.sticker's `tools/export_cs2_stickers.py`). Left empty,
+cs.charm uses the folders of an installed cs.sticker. *Slab Label Font* takes any
+.ttf/.otf, Blender's built-in font is the default.
 
 ### Physics
 
@@ -183,6 +206,9 @@ Each charm material is a small node tree around a reusable node group:
 | CS2 Charm Weapon | `csgo_weapon.vfx` | color with hue shift, saturation, brightness and contrast masked by the tint mask, detail texture with its own UV transform, color tint, pearlescence, ambient occlusion, metalness remap, glitter flakes, iridescence via thin film |
 | CS2 Charm Liquid | `csgo_simple_liquid.vfx` | see-through tinted glass, opaque print, liquid with hue-shifted color and waterline whose surface stays level in world space (see below) |
 | CS2 Charm UV | - | scale, offset and rotation for detail and glitter textures |
+| CS2 Charm Glass | `F_OPAQUE_REFRACT` | see-through, brightened case rim (`g_tOpaqueRefractMask`) and a glass reflection on top (Sticker Slab) |
+| CS2 Slab Sticker ... | `F_STICKERS` | the sticker finish groups of cs.sticker, laid over the slab card through the model's second UV map |
+| CS2 Slab Label | - | Geometry Nodes: label text on the slab |
 
 Texture mapping:
 
@@ -248,7 +274,12 @@ Tests run headless in Blender:
 blender -b --factory-startup --python tests/run_tests.py
 ```
 
-- Demo charms: `blender -b --factory-startup --python tools/generate_demo_charms.py`
+- Test charms and stickers (`tests/fixtures/library`, made from scratch,
+  not part of the add-on):
+  `blender -b --factory-startup --python tests/fixtures/generate_fixtures.py`
+- Sticker finish groups: `python tools/sync_sticker_nodes.py` copies them
+  from a cs.sticker checkout next to this repo into
+  `cs_charm/nodes/sticker_groups.py` (`--check` only compares)
 - Release zip: `python tools/build_zip.py`, check with
   `blender --command extension validate dist/cs_charm-<version>.zip`
 

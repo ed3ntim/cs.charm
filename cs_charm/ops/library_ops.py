@@ -13,7 +13,7 @@ from ..library import registry
 
 
 class CSCHARM_OT_refresh_library(bpy.types.Operator):
-    """Rescan the core set and the user charm folder"""
+    """Rescan the charm library folder"""
     bl_idname = "cs_charm.refresh_library"
     bl_label = "Refresh Library"
 

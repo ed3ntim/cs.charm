@@ -789,6 +789,6 @@ class BuildZipTest(unittest.TestCase):
             names = zf.namelist()
         self.assertIn("cs_charm/blender_manifest.toml", names)
         self.assertIn("cs_charm/LICENSE.md", names)
-        self.assertIn("cs_charm/charms/core/catalog.json", names)
-        self.assertFalse([n for n in names if "__pycache__" in n or n.startswith("cs_charm/charms/bundled")])
+        # No charms at all in the public zip (no demo set since 2.0).
+        self.assertFalse([n for n in names if "__pycache__" in n or n.startswith("cs_charm/charms/")])
         self.assertFalse([n for n in names if not n.startswith("cs_charm/")])

@@ -24,7 +24,7 @@ def get_catalog():
 
 
 def refresh(context=None):
-    """Reload core + bundled + user charms and rebuild the UI list."""
+    """Reload bundled + user charms and rebuild the UI list."""
     global _loaded
     context = context or bpy.context
     _catalog.load(utils.CORE_LIBRARY_DIR, utils.user_library_dir(), utils.BUNDLED_LIBRARY_DIR)
@@ -106,7 +106,11 @@ def on_filter_changed(state):
 
 def on_selection_changed(state, context):
     # Previews load lazily; touching the icon here starts loading early.
-    preview_icon(_catalog.get(selected_id(state)))
+    charm = _catalog.get(selected_id(state))
+    preview_icon(charm)
+    if charm is not None and any(spec.flag("F_STICKERS") for spec in charm.materials()):
+        from . import sticker_registry
+        sticker_registry.ensure_items(state)
 
 
 # ---------------------------------------------------------------------------

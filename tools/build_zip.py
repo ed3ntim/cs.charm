@@ -3,7 +3,7 @@
 """Build the installable zip: dist/cs_charm-<version>.zip
 
 The zip holds a single top-level folder ``cs_charm/`` with source code,
-manifest, LICENSE.md, COMMERCIAL.md and the core demo charms only (no tests, tools or repo
+manifest, LICENSE.md and COMMERCIAL.md, no charms (no tests, tools or repo
 docs). That layout installs both as an extension (Blender detects the
 manifest in the sub-folder) and as a legacy add-on.
 

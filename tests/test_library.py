@@ -256,15 +256,15 @@ class CatalogTest(unittest.TestCase):
             self.assertEqual([c.name for c in cat.charms], ["User Name"])
 
     def test_core_demo_catalog(self):
-        core = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                            "cs_charm", "charms", "core")
+        core = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "library")
         cat = C.Catalog().load(core_dir=core)
-        self.assertEqual(len(cat.charms), 2)
+        self.assertEqual(len(cat.charms), 3)
         self.assertEqual(cat.report.warnings, [])
         for charm in cat.charms:
             self.assertEqual(charm.missing_files(), [], charm.name)
-            self.assertTrue(charm.has_pattern(), charm.name)
             self.assertTrue(os.path.isfile(charm.icon), charm.name)
+            # The demo slab's look depends on its sticker, not the pattern.
+            self.assertEqual(charm.has_pattern(), charm.id != "demo_sticker_slab", charm.name)
 
 
 class ShadingTest(unittest.TestCase):

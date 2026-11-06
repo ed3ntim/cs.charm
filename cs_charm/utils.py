@@ -12,9 +12,12 @@ import bpy
 ADDON_ID = __package__
 
 ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
-CORE_LIBRARY_DIR = os.path.join(ADDON_DIR, "charms", "core")
 # Only present in personal builds (tools/build_zip.py --with-charms).
 BUNDLED_LIBRARY_DIR = os.path.join(ADDON_DIR, "charms", "bundled")
+# Extra charm and sticker folders loaded before all others. Nothing ships
+# there since 2.0 (no demo set); the tests point them at tests/fixtures.
+CORE_LIBRARY_DIR = ""
+CORE_STICKER_DIR = ""
 
 # Custom property keys.
 PROP_CHARM_ID = "cs_charm_id"            # on charm objects
@@ -25,6 +28,8 @@ PROP_MATERIAL_SPEC = "cs_charm_spec"     # JSON copy of the spec, survives libra
 PROP_MODEL = "cs_charm_model"            # on template meshes: source model path
 PROP_SLOTS = "cs_charm_slots"            # on meshes: glTF material names per slot
 PROP_COLLECTION = "cs_charm_collection"  # on the per-scene charm collections
+PROP_STICKER = "cs_charm_sticker"        # on slab objects: JSON copy of the sticker
+PROP_LABEL = "cs_charm_label"            # on slab meshes: label plane (JSON)
 
 CHARM_COLLECTION_NAME = "CS Charms"
 
@@ -44,6 +49,43 @@ def user_library_dir():
         return ""
     path = bpy.path.abspath(prefs.user_path)
     return path if os.path.isdir(path) else ""
+
+
+def _sticker_addon_dirs():
+    """Library folders of an installed cs.sticker: its user folder from the
+    preferences, then its core and bundled sets."""
+    import sys
+    out = []
+    for key, addon in bpy.context.preferences.addons.items():
+        if key != "cs_sticker" and not key.endswith(".cs_sticker"):
+            continue
+        prefs = getattr(addon, "preferences", None)
+        user = getattr(prefs, "user_path", "") if prefs else ""
+        if user:
+            out.append(bpy.path.abspath(user))
+        module = sys.modules.get(key)
+        root = os.path.dirname(os.path.abspath(module.__file__)) if module and module.__file__ else ""
+        if root:
+            out += [os.path.join(root, "stickers", "bundled"), os.path.join(root, "stickers", "core")]
+    return out
+
+
+def sticker_library_dirs():
+    """Sticker library folders, most specific first: the folder from the
+    preferences, or (empty) the folders of an installed cs.sticker, then
+    CORE_STICKER_DIR (tests only)."""
+    prefs = get_prefs()
+    path = bpy.path.abspath(prefs.sticker_path) if prefs is not None and prefs.sticker_path else ""
+    dirs = [path] if path else _sticker_addon_dirs()
+    if CORE_STICKER_DIR:
+        dirs.append(CORE_STICKER_DIR)
+    seen, out = set(), []
+    for d in dirs:
+        key = os.path.normcase(os.path.abspath(d))
+        if key not in seen and os.path.isdir(d):
+            seen.add(key)
+            out.append(d)
+    return out
 
 
 def is_charm(obj):

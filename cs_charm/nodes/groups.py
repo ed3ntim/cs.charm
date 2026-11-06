@@ -6,6 +6,8 @@
 * ``CS2 Charm Liquid``  csgo_simple_liquid.vfx (Butane Buddy)
 * ``CS2 Charm UV``      UV transform (scale / offset / rotation) for the
                         detail texture and the glitter normal map
+* ``CS2 Charm Glass``   F_OPAQUE_REFRACT: see-through, brightened case rim
+                        and a glass reflection on top (Sticker Slab)
 
 Groups take *texture samples* as inputs instead of containing Image Texture
 nodes, so one group serves every charm. material.py creates the image
@@ -32,12 +34,13 @@ from .builder import GroupBuilder, principled, set_bsdf
 
 # Bump when group contents change; outdated groups are renamed (existing
 # materials keep working) and rebuilt.
-GROUP_VERSION = 2
+GROUP_VERSION = 3
 VERSION_KEY = "cs_charm_version"
 
 WEAPON_GROUP = "CS2 Charm Weapon"
 LIQUID_GROUP = "CS2 Charm Liquid"
 UV_GROUP = "CS2 Charm UV"
+GLASS_GROUP = "CS2 Charm Glass"
 
 FLAT_NORMAL = (0.5, 0.5, 1.0, 1.0)
 WHITE = (1.0, 1.0, 1.0, 1.0)
@@ -156,7 +159,9 @@ def _build_weapon(tree):
     detail_mask = b.math("MULTIPLY", detail_blend,
                          b.mix("FLOAT", detail_by_tint, 1.0, tint, y=100), y=100)
     col = b.mix("RGBA", detail_mask, col, detail, blend="MULTIPLY", y=300)
-    col = b.mix("RGBA", tint_amount, col, color_tint, blend="MULTIPLY", y=300)
+    # g_vColorTint colors only the tint mask (Sticker Slab: the label frame
+    # in the sticker's rarity color); without a mask the whole charm.
+    col = b.mix("RGBA", b.math("MULTIPLY", tint_amount, tint, y=150), col, color_tint, blend="MULTIPLY", y=300)
     # Pearlescent: hue drifts toward glancing angles inside the effect mask.
     b.column(-300)
     facing = b.node("ShaderNodeLayerWeight", y=500)
@@ -381,8 +386,65 @@ def _build_liquid(tree):
     b.link(final.outputs[0], out)
 
 
+# ---------------------------------------------------------------------------
+# F_OPAQUE_REFRACT
+# ---------------------------------------------------------------------------
+
+def _build_glass(tree):
+    """Glass case on an opaque mesh. In CS2 the shader samples the screen
+    behind the model where g_tOpaqueRefractMask is set, brightens it and
+    lowers its contrast: the acrylic rim looks silvery and see-through.
+    Here: transparent plus a milky, brightened layer inside the mask, and
+    a glass reflection over the whole surface (the front glass)."""
+    b = GroupBuilder(tree)
+    surface = b.input("Shader", "SHADER", description="Opaque surface under the glass")
+    mask = b.input("Refract Mask", default=0.0, lo=0.0, hi=1.0, factor=True,
+                   description="g_tOpaqueRefractMask R: where the case is see-through")
+    opacity = b.input("Opacity", default=0.9, lo=0.0, hi=1.0, factor=True,
+                      description="g_flRefractOpacity: how much of the background shows through the rim")
+    bright = b.input("Brightness", default=4.0, lo=0.0, hi=20.0,
+                     description="g_flRefractBrightness: lightens what is seen through the rim")
+    blur = b.input("Blur", default=0.35, lo=0.0, hi=1.0, factor=True,
+                   description="g_flRefractBlur: frosting of the rim")
+    gloss = b.input("Glass Reflection", default=1.0, lo=0.0, hi=2.0,
+                    description="Strength of the reflection on the glass")
+    out = b.output("Shader")
+
+    # Rim: background through the acrylic, brightened (milky) and blurred.
+    b.column(-600)
+    see = b.node("ShaderNodeBsdfTransparent", y=300)
+    milky_col = b.math("MINIMUM", b.math("MULTIPLY", bright, 0.22, y=100), 1.0, y=100)
+    milky = principled(b, x=-350, y=100)
+    set_bsdf(b, milky, Base_Color=b.combine(milky_col, milky_col, milky_col, x=-500, y=0),
+             Roughness=blur, Specular_IOR_Level=0.5)
+    b.column(-100)
+    rim = b.node("ShaderNodeMixShader", y=250)
+    b.set_or_link(rim, 0, b.math("SUBTRACT", 1.0, b.math("MULTIPLY", opacity, 0.7, x=-300, y=400), x=-200, y=400))
+    b.link(see.outputs[0], rim.inputs[1])
+    b.link(milky.outputs[0], rim.inputs[2])
+    b.column(150)
+    body = b.node("ShaderNodeMixShader", y=100)
+    b.set_or_link(body, 0, mask)
+    b.link(surface, body.inputs[1])
+    b.link(rim.outputs[0], body.inputs[2])
+
+    # Front glass: Fresnel reflection everywhere.
+    fresnel = b.node("ShaderNodeFresnel", x=150, y=-200)
+    b.set_or_link(fresnel, "IOR", 1.5)
+    glossy = b.node("ShaderNodeBsdfGlossy", x=150, y=-400)
+    b.set_or_link(glossy, "Roughness", 0.03)
+    b.column(400)
+    top = b.node("ShaderNodeMixShader", y=0)
+    b.set_or_link(top, 0, b.math("MINIMUM", b.math("MULTIPLY", fresnel.outputs[0], gloss, x=350, y=-150), 1.0,
+                                 x=400, y=-150))
+    b.link(body.outputs[0], top.inputs[1])
+    b.link(glossy.outputs[0], top.inputs[2])
+    b.link(top.outputs[0], out)
+
+
 _BUILDERS = {
     "UV": (UV_GROUP, _build_uv),
+    "GLASS": (GLASS_GROUP, _build_glass),
     "WEAPON": (WEAPON_GROUP, _build_weapon),
     "LIQUID": (LIQUID_GROUP, _build_liquid),
 }

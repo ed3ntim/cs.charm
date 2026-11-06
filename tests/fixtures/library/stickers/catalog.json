@@ -1,0 +1,36 @@
+{
+ "version": 1,
+ "generator": "cs.charm tools/generate_demo_charms.py",
+ "note": "Demo stickers for the Sticker Slab, made from scratch, no game assets. Same format as cs.sticker's catalog.json.",
+ "stickers": [
+  {
+   "id": "demo_star",
+   "name": "Demo Star",
+   "collection": "cs.charm Demo 2026",
+   "finish": "PAPER",
+   "rarity": "rare",
+   "kit_id": 2026,
+   "textures": {
+    "base": "textures/demo_star.png"
+   },
+   "tags": [
+    "demo"
+   ]
+  },
+  {
+   "id": "demo_star_holo",
+   "name": "Demo Star (Holo)",
+   "collection": "cs.charm Demo 2026",
+   "finish": "HOLO",
+   "rarity": "mythical",
+   "kit_id": 2027,
+   "textures": {
+    "base": "textures/demo_star.png",
+    "holomask": "textures/demo_star_holomask.png"
+   },
+   "tags": [
+    "demo"
+   ]
+  }
+ ]
+}

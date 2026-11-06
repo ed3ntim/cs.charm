@@ -3,7 +3,8 @@
 """Charm catalog: loading libraries and searching them. Pure Python (no bpy).
 
 A library is a folder with a ``catalog.json`` (written by
-tools/export_cs2_charms.py or tools/generate_demo_charms.py)::
+tools/export_cs2_charms.py; tests/fixtures/generate_fixtures.py writes the
+same layout for the tests)::
 
     {
       "version": 1,
@@ -317,7 +318,7 @@ def load_library(root, source, report):
 
 
 class Catalog:
-    """All known charms (core demo set + bundled + user library)."""
+    """All known charms (core folder + bundled + user library)."""
 
     def __init__(self):
         self.charms = []

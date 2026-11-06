@@ -24,6 +24,7 @@ from ..library import catalog as C
 from ..library import gltf, patterns
 from ..library import registry
 from ..nodes import material as M
+from ..nodes import slab
 
 _templates = {}  # model path -> template mesh name
 
@@ -121,6 +122,9 @@ def template_mesh(charm):
             and abs(mesh.get("cs_charm_mtime", 0.0) - _mtime(charm.model)) < 1e-3:
         return mesh, False
     mesh = _import_gltf(charm.model)
+    if any(spec.flag("F_STICKERS") for spec in charm.materials()) and len(mesh.uv_layers) > 1:
+        # Sticker Slab: the second UV map places the sticker (TEXCOORD_1).
+        mesh.uv_layers[1].name = slab.STICKER_UV
     info = _slot_info(mesh)
     # Material names in the glTF are unique per file; strip Blender's ".001".
     info = [(_strip_suffix(n), v) for n, v in info]
@@ -219,7 +223,23 @@ def create_charm_object(context, charm, pattern=0):
     state.base_height = (max(zs) - min(zs)) if zs else 0.05
     obj.matrix_world = Matrix.Identity(4)
     warnings = setup_materials(obj, charm, pattern)
+    if slab.is_slab(obj):
+        warnings += _fill_slab(context, obj)
     return obj, warnings
+
+
+def _fill_slab(context, obj):
+    """Put the sticker chosen in the picker into a new Sticker Slab."""
+    from ..library import sticker_registry
+    sticker = None
+    try:
+        sticker = sticker_registry.selected_sticker(context)
+    except (AttributeError, RuntimeError):
+        pass
+    warnings = slab.apply_sticker(obj, sticker)
+    if sticker is None:
+        warnings.append("Sticker Slab without sticker: pick one in the Library panel")
+    return warnings
 
 
 def charm_of(obj):
@@ -256,6 +276,7 @@ def rebuild_materials(obj):
     for mat in old:
         if mat is not None and mat.users == 0:
             bpy.data.materials.remove(mat)
+    warnings += slab.rebuild(obj)
     return warnings
 
 

@@ -39,6 +39,43 @@ def set_rarity_items(rarities):
     ]
 
 
+_sticker_collection_items = [("ALL", "All Collections", "")]
+_sticker_finish_items = [("ALL", "All Finishes", "")]
+_sticker_rarity_items = [("ALL", "All Rarities", "")]
+
+
+def set_sticker_filter_items(collections, finishes, rarities):
+    from .library import stickers as ST
+    _sticker_collection_items[:] = [("ALL", "All Collections", "")] + [
+        (n, n, f"Only stickers from {n}") for n in collections]
+    _sticker_finish_items[:] = [("ALL", "All Finishes", "")] + [
+        (f, ST.FINISH_LABELS.get(f, f.title()), f"Only {ST.FINISH_LABELS.get(f, f)} stickers") for f in finishes]
+    _sticker_rarity_items[:] = [("ALL", "All Rarities", "")] + [
+        (r, C.rarity_label(r), f"Only {C.rarity_label(r)} stickers") for r in rarities]
+
+
+def _sticker_collection_enum(self, context):
+    return _sticker_collection_items
+
+
+def _sticker_finish_enum(self, context):
+    return _sticker_finish_items
+
+
+def _sticker_rarity_enum(self, context):
+    return _sticker_rarity_items
+
+
+def _on_sticker_filter(self, context):
+    from .library import sticker_registry
+    sticker_registry.on_filter_changed(self)
+
+
+def _on_sticker_select(self, context):
+    from .library import sticker_registry
+    sticker_registry.on_selection_changed(self)
+
+
 def _collection_enum(self, context):
     return _collection_items
 
@@ -67,6 +104,14 @@ class CSCHARM_PG_item(bpy.types.PropertyGroup):
     has_missing: BoolProperty(description="Model or textures are missing")
 
 
+class CSCHARM_PG_sticker_item(bpy.types.PropertyGroup):
+    """Mirror of one sticker of the sticker library (slab sticker picker)."""
+    sticker_id: StringProperty()
+    collection: StringProperty()
+    finish: StringProperty()
+    rarity: StringProperty()
+
+
 class CSCHARM_PG_state(bpy.types.PropertyGroup):
     items: CollectionProperty(type=CSCHARM_PG_item)
     index: IntProperty(name="Charm", default=0, update=_on_select)
@@ -84,6 +129,19 @@ class CSCHARM_PG_state(bpy.types.PropertyGroup):
         items=_rarity_enum, update=_on_filter_change,
     )
     show_warnings: BoolProperty(name="Show Load Warnings", default=False)
+
+    # Sticker picker of the Sticker Slab
+    sticker_items: CollectionProperty(type=CSCHARM_PG_sticker_item)
+    sticker_index: IntProperty(name="Sticker", default=-1, update=_on_sticker_select)
+    sticker_id: StringProperty(name="Sticker", description="Sticker for new Sticker Slabs")
+    sticker_search: StringProperty(
+        name="Search Stickers", description="Filter by name, event, finish or rarity (all words must match)",
+        options={"TEXTEDIT_UPDATE"}, update=_on_sticker_filter,
+    )
+    sticker_collection: EnumProperty(name="Collection", items=_sticker_collection_enum,
+                                     update=_on_sticker_filter)
+    sticker_finish: EnumProperty(name="Finish", items=_sticker_finish_enum, update=_on_sticker_filter)
+    sticker_rarity: EnumProperty(name="Rarity", items=_sticker_rarity_enum, update=_on_sticker_filter)
     show_preview: BoolProperty(name="Preview", default=True)
 
 
@@ -153,6 +211,11 @@ def _on_pattern(self, context):
     spawn.on_pattern_changed(self.id_data)
 
 
+def _on_slab(self, context):
+    from .nodes import slab
+    slab.on_settings_changed(self.id_data)
+
+
 def _on_transform(self, context):
     from .ops import placement
     placement.on_transform_changed(self.id_data)
@@ -210,6 +273,31 @@ class CSCHARM_PG_charm(bpy.types.PropertyGroup):
     rest_z: FloatVectorProperty(size=3, default=(0.0, 0.0, 1.0), options={"HIDDEN"})
     rest_key: StringProperty(options={"HIDDEN"})
 
+    # Sticker Slab (nodes/slab.py); the sticker itself is stored as JSON
+    # in the object's PROP_STICKER custom property.
+    sticker_wear: FloatProperty(
+        name="Sticker Wear", description="Scrapes the sticker in the slab. The game has no wear on "
+                                         "slabbed stickers (0)",
+        default=0.0, min=0.0, max=1.0, subtype="FACTOR", update=_on_slab,
+    )
+    label_text: StringProperty(
+        name="Label Text", description="Main line of the slab label. Empty = sticker name and event "
+                                       "as in the game",
+        update=_on_slab,
+    )
+    label_serial: IntProperty(
+        name="Serial", description="Serial number printed on the slab label (10 digits)",
+        default=0, min=0, max=2 ** 31 - 1, update=_on_slab,
+    )
+    use_label_color: BoolProperty(
+        name="Custom Label Color", default=False, update=_on_slab,
+        description="Color the label frame yourself instead of using the sticker's rarity color",
+    )
+    label_color: FloatVectorProperty(
+        name="Label Color", description="Label frame color (sRGB)",
+        size=3, subtype="COLOR_GAMMA", min=0.0, max=1.0, default=(0.29, 0.41, 1.0), update=_on_slab,
+    )
+
     # Attachment / physics
     surface: PointerProperty(name="Surface", type=bpy.types.Object,
                              description="Object the charm was placed on (collisions, re-attaching)")
@@ -227,7 +315,7 @@ class CSCHARM_PG_charm(bpy.types.PropertyGroup):
     )
 
 
-classes = (CSCHARM_PG_item, CSCHARM_PG_state, CSCHARM_PG_placement, CSCHARM_PG_charm)
+classes = (CSCHARM_PG_item, CSCHARM_PG_sticker_item, CSCHARM_PG_state, CSCHARM_PG_placement, CSCHARM_PG_charm)
 
 
 def register():

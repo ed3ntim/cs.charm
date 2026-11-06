@@ -5,9 +5,10 @@
 import bpy
 
 from .. import utils
-from ..library import registry
+from ..library import registry, sticker_registry
 from ..library import shading as S
 from ..nodes import material as M
+from ..nodes import slab
 from ..ops.spawn import charm_of
 from .lists import RARITY_ICONS
 
@@ -17,8 +18,55 @@ TAB = "cs.charm"
 # Texture inputs are left out; every other input is drawn.
 _TEXTURE_INPUTS = {
     "Color", "Normal Map", "Metal Pack", "Ambient Occlusion", "Tint Mask", "Detail",
-    "Glitter Normal", "Glitter Mask", "Color Alpha", "Liquid Mask", "UV",
+    "Glitter Normal", "Glitter Mask", "Color Alpha", "Liquid Mask", "UV", "Shader", "Refract Mask",
 }
+
+_NODE_TITLES = {S.NODE_DETAIL_UV: "Detail Pattern", S.NODE_GLITTER_UV: "Glitter Flakes", S.NODE_GLASS: "Glass"}
+
+
+def _sticker_info(layout, sticker):
+    col = layout.column(align=True)
+    col.label(text=sticker.label_text(), icon="IMAGE_RGB_ALPHA")
+    from .lists import RARITY_ICONS
+    col.label(text=f"{sticker.finish_label}, {sticker.rarity_label}",
+              icon=RARITY_ICONS.get(sticker.rarity, "BLANK1"))
+
+
+def draw_sticker_picker(layout, context):
+    """Sticker picker under the library when the Sticker Slab is selected."""
+    state = context.window_manager.cs_charm
+    box = layout.box()
+    box.label(text="Sticker for the Slab", icon="IMAGE_RGB_ALPHA")
+    if not sticker_registry.is_loaded():
+        # Panels may not write to the WindowManager: loading is an operator.
+        box.operator("cs_charm.refresh_stickers", text="Load Stickers", icon="IMPORT")
+        return
+    lib = sticker_registry.get_library()
+    box.prop(state, "sticker_search", text="", icon="VIEWZOOM")
+    row = box.row(align=True)
+    row.prop(state, "sticker_collection", text="")
+    row = box.row(align=True)
+    row.prop(state, "sticker_finish", text="")
+    row.prop(state, "sticker_rarity", text="")
+    box.template_list("CSCHARM_UL_stickers", "", state, "sticker_items", state, "sticker_index", rows=5)
+    row = box.row()
+    total, shown = sticker_registry.match_count(), len(state.sticker_items)
+    text = f"{total} of {len(lib)} stickers"
+    if shown < total:
+        text += f" (first {shown})"
+    row.label(text=text)
+    row.operator("cs_charm.refresh_stickers", text="", icon="FILE_REFRESH")
+    sticker = sticker_registry.selected_sticker(context)
+    if sticker is None:
+        box.label(text="Pick a sticker for new slabs", icon="INFO")
+        return
+    _sticker_info(box, sticker)
+    if state.show_preview:
+        icon_id = sticker_registry.preview_icon(sticker)
+        if icon_id:
+            box.template_icon(icon_value=icon_id, scale=6.0)
+    if slab.is_slab(context.active_object):
+        box.operator("cs_charm.set_sticker", icon="FILE_REFRESH")
 
 
 class _Panel:
@@ -73,6 +121,9 @@ class CSCHARM_PT_library(_Panel, bpy.types.Panel):
                     box.template_icon(icon_value=icon_id, scale=7.0)
                 else:
                     box.label(text="No preview image", icon="IMAGE_DATA")
+
+        if slab.is_slab_charm(charm):
+            draw_sticker_picker(layout, context)
 
         warnings = catalog.report.warnings
         if warnings:
@@ -157,6 +208,9 @@ class CSCHARM_PT_active(_Panel, bpy.types.Panel):
         else:
             box.label(text="The pattern does not change this charm's look")
 
+        if slab.is_slab(obj):
+            self.draw_slab(layout, context, obj)
+
         # Transform
         box = layout.box()
         box.label(text="Placement", icon="ORIENTATION_GIMBAL")
@@ -198,6 +252,30 @@ class CSCHARM_PT_active(_Panel, bpy.types.Panel):
 
         layout.operator("cs_charm.delete", icon="TRASH")
 
+    @staticmethod
+    def draw_slab(layout, context, obj):
+        state = obj.cs_charm
+        box = layout.box()
+        box.label(text="Sticker Slab", icon="IMAGE_RGB_ALPHA")
+        sticker = slab.sticker_of(obj)
+        if sticker is not None:
+            _sticker_info(box, sticker)
+            box.label(text=f"Serial (sticker kit): {sticker.serial()}")
+        else:
+            box.label(text="No sticker", icon="ERROR")
+        row = box.row(align=True)
+        row.operator("cs_charm.set_sticker", text="Use Picked Sticker", icon="FILE_REFRESH")
+        row.operator("cs_charm.show_sticker", text="", icon="VIEWZOOM")
+        box.prop(state, "sticker_wear", slider=True)
+        box.prop(state, "label_text", text="", icon="FONT_DATA")
+        if not state.label_text and sticker is not None:
+            box.label(text=f"Label: {sticker.label_text()}")
+        row = box.row(align=True)
+        row.prop(state, "use_label_color", text="Custom Color")
+        sub = row.row(align=True)
+        sub.enabled = state.use_label_color
+        sub.prop(state, "label_color", text="")
+
 
 class CSCHARM_PT_materials(_Panel, bpy.types.Panel):
     bl_label = "Material Parameters"
@@ -220,7 +298,7 @@ class CSCHARM_PT_materials(_Panel, bpy.types.Panel):
             for node in nodes:
                 col = box.column(align=True)
                 if node.name != S.NODE_MAIN:
-                    col.label(text="Detail Pattern" if node.name == S.NODE_DETAIL_UV else "Glitter Flakes")
+                    col.label(text=_NODE_TITLES.get(node.name, node.name))
                 for sock in node.inputs:
                     if sock.name in _TEXTURE_INPUTS or sock.is_linked or not hasattr(sock, "default_value"):
                         continue

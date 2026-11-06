@@ -34,6 +34,23 @@
     "demo",
     "liquid"
    ]
+  },
+  {
+   "id": "demo_sticker_slab",
+   "name": "Demo Sticker Slab",
+   "collection": "cs.charm Demo",
+   "rarity": "common",
+   "model": "demo/demo_sticker_slab.glb",
+   "icon": "icons/demo_sticker_slab.png",
+   "slots": {
+    "demo_chain": "demo/demo_chain.vmat",
+    "demo_slab": "demo/demo_sticker_slab.vmat"
+   },
+   "tags": [
+    "demo",
+    "slab",
+    "sticker"
+   ]
   }
  ],
  "materials": {
@@ -130,6 +147,40 @@
    "dynamic": {
     "g_flLiquidColorHueShift": "return lerp(0,320,$KeychainSeed);",
     "g_flLiquidLevelHeight": "return lerp(.45,.8,frac($KeychainSeed*100));"
+   }
+  },
+  "demo/demo_sticker_slab.vmat": {
+   "shader": "csgo_weapon.vfx",
+   "textures": {
+    "g_tColor": "demo/demo_slab_color.png",
+    "g_tTintMask": "demo/demo_slab_tint.png",
+    "g_tOpaqueRefractMask": "demo/demo_slab_refract.png",
+    "g_tMetalness": "demo/demo_slab_metal.png",
+    "g_tNormal": "demo/demo_flat_normal.png"
+   },
+   "params": {
+    "F_STICKERS": 1,
+    "F_OPAQUE_REFRACT": 1,
+    "F_TINT_MASK": 1,
+    "g_flModelTintAmount": 1,
+    "g_vColorTint": [
+     1,
+     1,
+     1,
+     0
+    ],
+    "g_vMetalnessRemapRange": [
+     0,
+     1,
+     0,
+     0
+    ],
+    "g_flRefractOpacity": 0.9,
+    "g_flRefractBrightness": 4,
+    "g_flRefractBlur": 0.35
+   },
+   "dynamic": {
+    "g_vColorTint": "return exists($sticker_rarity_color) ? $sticker_rarity_color : float3(1,1,1);"
    }
   }
  }

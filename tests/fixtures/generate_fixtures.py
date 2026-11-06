@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Copyright (c) 2026 ed3n
-"""Generate the two demo charms shipped with the add-on (run inside Blender):
+"""Generate the test charms (run inside Blender):
 
-    blender -b --factory-startup --python tools/generate_demo_charms.py
+    blender -b --factory-startup --python tests/fixtures/generate_fixtures.py
 
-Writes cs_charm/charms/core/: catalog.json, the models (.glb), procedural
+Writes tests/fixtures/library/ (not part of the add-on since 2.0):
+catalog.json, the models (.glb), procedural
 textures (PNG) and preview icons. Everything is made from scratch here, no
 game assets. The demos use the same data layout as a real CS2 export, so
 they exercise the whole pipeline:
@@ -13,6 +14,11 @@ they exercise the whole pipeline:
                      glitter flakes in the effect mask, metal chain
 * "Demo Fuel Flask"  csgo_simple_liquid.vfx: liquid color and fill level
                      driven by the pattern (same formulas as Butane Buddy)
+* "Demo Sticker Slab" csgo_weapon.vfx with F_STICKERS / F_OPAQUE_REFRACT:
+                     own case geometry with the same UV layout as the CS2
+                     slab (label and card in the color texture, sticker UV
+                     as second UV map), plus two demo stickers in
+                     library/stickers (a cs.sticker style catalog)
 
 Models are in meters with the attachment point at the origin and the
 charm hanging along -Z, like Source2Viewer's charm exports.
@@ -27,8 +33,7 @@ import bpy
 import numpy as np
 from mathutils import Vector
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(ROOT, "cs_charm", "charms", "core")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "library")
 MODELS = "demo"
 ICONS = "icons"
 TEX = 256
@@ -138,6 +143,110 @@ def flask_textures():
     }
 
 
+# Sticker Slab layout, pixels of a 1024 texture (origin top left), as in
+# CS2's sticker_display_case_color: label and card share one front face.
+SLAB_TEX = 512
+SLAB_FRONT_PX = (12, 12, 500, 610)    # label + card
+SLAB_LABEL_BOTTOM_PX = 113
+SLAB_CARD_TOP_PX = 124
+SLAB_FRAME_PX = (560, 40, 1000, 600)  # case faces
+
+
+def _px(value, size=SLAB_TEX):
+    return int(round(value * size / 1024.0))
+
+
+def slab_textures():
+    size = SLAB_TEX
+    left, top, right, bottom = (_px(c) for c in SLAB_FRONT_PX)
+    label_bottom, card_top = _px(SLAB_LABEL_BOTTOM_PX), _px(SLAB_CARD_TOP_PX)
+    yy, xx = np.mgrid[0:size, 0:size]
+    color = np.ones((size, size, 4))
+    color[..., :3] = 0.62                                       # case
+    card = (xx >= left) & (xx <= right) & (yy >= card_top) & (yy <= bottom)
+    dots = (np.sin(xx * 1.9) * np.sin(yy * 1.9 + (xx // 3 % 2) * 1.6)) > 0.6
+    color[card, :3] = 0.80
+    color[card & dots, :3] = 0.76
+    label = (xx >= left) & (xx <= right) & (yy >= top) & (yy <= label_bottom)
+    color[label, :3] = 0.95
+    frame = label & ((xx < left + 2) | (xx > right - 2) | (yy < top + 2) | (yy > label_bottom - 2))
+    badge = label & (np.abs(xx - (left + right) / 2) < 10) & (yy > label_bottom - 7)
+    bars = (label & (xx > left + 6) & (xx < left + 70) & (yy > label_bottom - 9) & (yy < label_bottom - 4)
+            & (RNG.uniform(0, 1, (size, size)) > 0.4))
+    color[frame | badge, :3] = 0.85
+    color[bars, :3] = 0.2
+    tint = gray((frame | badge).astype(float), size)
+    refract = gray((~(card | label)).astype(float), size)
+    pack = np.ones((size, size, 4))
+    pack[..., 0] = np.where(card | label, 0.6, 0.35)            # roughness
+    pack[..., 1] = 0.0
+    pack[..., 2] = 0.0
+    return {
+        "g_tColor": save_png("demo_slab_color", color),
+        "g_tTintMask": save_png("demo_slab_tint", tint),
+        "g_tOpaqueRefractMask": save_png("demo_slab_refract", refract),
+        "g_tMetalness": save_png("demo_slab_metal", pack),
+        "g_tNormal": "demo/demo_flat_normal.png",
+    }
+
+
+def demo_sticker_textures():
+    """A star badge (paper) and its holo version: base color with alpha and
+    a holo mask (R strength, G/B spectrum offset), in cs.sticker roles."""
+    size = 256
+    u, v = uv_grid(size)
+    x, y = u - 0.5, v - 0.5
+    r = np.hypot(x, y)
+    a = np.arctan2(y, x)
+    star = r < 0.22 + 0.12 * np.cos(5 * a)
+    disc = r < 0.42
+    ring = disc & (r > 0.38)
+    base = np.zeros((size, size, 4))
+    base[disc, :3] = (0.08, 0.10, 0.16)
+    base[ring, :3] = (0.95, 0.75, 0.2)
+    base[star, :3] = (0.95, 0.35, 0.15)
+    base[..., 3] = disc.astype(float)
+    holo = np.zeros((size, size, 4))
+    holo[..., 0] = star.astype(float)
+    holo[..., 1] = u
+    holo[..., 2] = v
+    holo[..., 3] = 1.0
+    folder = os.path.join(OUT, "stickers", "textures")
+    os.makedirs(folder, exist_ok=True)
+
+    def write(name, rgba):
+        img = bpy.data.images.new(name, size, size, alpha=True)
+        img.pixels.foreach_set(np.flipud(rgba).astype(np.float32).ravel())
+        img.filepath_raw = os.path.join(folder, name + ".png")
+        img.file_format = "PNG"
+        img.save()
+        bpy.data.images.remove(img)
+        return f"textures/{name}.png"
+
+    return write("demo_star", base), write("demo_star_holomask", holo)
+
+
+def write_sticker_catalog():
+    base, holomask = demo_sticker_textures()
+    catalog = {
+        "version": 1,
+        "generator": "cs.charm tests/fixtures/generate_fixtures.py",
+        "note": "Demo stickers for the Sticker Slab, made from scratch, no game assets. "
+                "Same format as cs.sticker's catalog.json.",
+        "stickers": [
+            {"id": "demo_star", "name": "Demo Star", "collection": "cs.charm Demo 2026", "finish": "PAPER",
+             "rarity": "rare", "kit_id": 2026, "textures": {"base": base}, "tags": ["demo"]},
+            {"id": "demo_star_holo", "name": "Demo Star (Holo)", "collection": "cs.charm Demo 2026",
+             "finish": "HOLO", "rarity": "mythical", "kit_id": 2027,
+             "textures": {"base": base, "holomask": holomask},
+             "tags": ["demo"]},
+        ],
+    }
+    with open(os.path.join(OUT, "stickers", "catalog.json"), "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(catalog, fh, indent=1)
+        fh.write("\n")
+
+
 # ---------------------------------------------------------------------------
 # Geometry
 # ---------------------------------------------------------------------------
@@ -232,6 +341,65 @@ def build_flask():
     cap = bpy.context.active_object
     cap.data.materials.append(chain_mat)
     return join(links + [body, cap], "demo_fuel_flask")
+
+
+def build_slab():
+    """Case plus a front face for label and card. UV map 1 holds the color
+    texture layout, UV map 2 ("StickerUV") the sticker: card = 0..1, label
+    above, everything else on one point outside (like TEXCOORD_1 of the CS2
+    model)."""
+    chain_mat = material("demo_chain", (0.78, 0.78, 0.8, 1.0))
+    slab_mat = material("demo_slab", (0.8, 0.8, 0.8, 1.0))
+    links, z = chain(chain_mat, links=2)
+    left, top, right, bottom = SLAB_FRONT_PX
+    width = 0.040
+    px = width / (right - left)                       # meters per texture pixel
+    height = (bottom - top) * px
+    front_top = z - 0.004
+    depth = 0.0036
+    margin = 0.0018
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=(depth / 2, 0, front_top - height / 2))
+    case = bpy.context.active_object
+    case.scale = (depth, width + 2 * margin, height + 2 * margin)
+    bpy.ops.object.transform_apply(scale=True)
+    case.data.materials.append(slab_mat)
+    fl, ft, fr, fb = (c / 1024.0 for c in SLAB_FRAME_PX)
+    uv = case.data.uv_layers.active
+    for poly in case.data.polygons:
+        for li in poly.loop_indices:
+            co = case.data.vertices[case.data.loops[li].vertex_index].co
+            s = co.y / (width + 2 * margin) + 0.5 if abs(poly.normal.x) > 0.5 else co.x / depth + 0.5
+            t = (co.z - (front_top - height / 2)) / (height + 2 * margin) + 0.5
+            uv.data[li].uv = (fl + (fr - fl) * s, 1.0 - fb + (fb - ft) * min(max(t, 0.0), 1.0))
+    sticker_uv = case.data.uv_layers.new(name="StickerUV")
+    for loop_uv in sticker_uv.data:
+        loop_uv.uv = (-0.9296875, 0.0)
+    # Front face (+X), slightly in front of the case.
+    bpy.ops.mesh.primitive_plane_add(size=1.0, location=(depth + 0.0002, 0, front_top - height / 2),
+                                     rotation=(0, math.pi / 2, 0))
+    front = bpy.context.active_object
+    front.scale = (height, width, 1.0)
+    bpy.ops.object.transform_apply(rotation=True, scale=True)
+    if front.data.polygons[0].normal.x < 0:
+        front.data.flip_normals()
+    front.data.materials.append(slab_mat)
+    uv0 = front.data.uv_layers.active
+    uv1 = front.data.uv_layers.new(name="StickerUV")
+    card_h = (bottom - SLAB_CARD_TOP_PX) * px
+    for li, loop in enumerate(front.data.loops):
+        co = front.data.vertices[loop.vertex_index].co
+        s = co.y / width + 0.5                         # 0 left .. 1 right, seen from +X
+        t = (co.z - (front_top - height / 2)) / height + 0.5   # 0 bottom .. 1 top
+        uv0.data[li].uv = ((left + s * (right - left)) / 1024.0, 1.0 - (bottom - t * (bottom - top)) / 1024.0)
+        uv1.data[li].uv = (s, t * height / card_h)
+    # Hanger between chain and case.
+    bpy.ops.mesh.primitive_cylinder_add(vertices=12, radius=0.0012, depth=0.004,
+                                        location=(depth / 2, 0, z - 0.002))
+    hanger = bpy.context.active_object
+    hanger.data.materials.append(chain_mat)
+    for obj in links + [hanger]:
+        obj.data.uv_layers.new(name="StickerUV")
+    return join(links + [hanger, case, front], "demo_sticker_slab")
 
 
 def export(obj, name):
@@ -358,11 +526,28 @@ def main():
     flask_icon = render_icon(flask, {"demo_flask": flask_tex["g_tColorA"],
                                      "demo_chain": chain_tex["g_tColor"]}, "demo_fuel_flask")
     flask_model = export(flask, "demo_fuel_flask")
+    reset()
+    slab_tex = slab_textures()
+    slab = build_slab()
+    slab_icon = render_icon(slab, {"demo_slab": slab_tex["g_tColor"], "demo_chain": chain_tex["g_tColor"]},
+                            "demo_sticker_slab")
+    slab_model = export(slab, "demo_sticker_slab")
+
+    materials["demo/demo_sticker_slab.vmat"] = {
+        "shader": "csgo_weapon.vfx",
+        "textures": slab_tex,
+        "params": {"F_STICKERS": 1, "F_OPAQUE_REFRACT": 1, "F_TINT_MASK": 1, "g_flModelTintAmount": 1,
+                   "g_vColorTint": [1, 1, 1, 0], "g_vMetalnessRemapRange": [0, 1, 0, 0],
+                   "g_flRefractOpacity": 0.9, "g_flRefractBrightness": 4, "g_flRefractBlur": 0.35},
+        # The CS2 slab's expression: label frame in the sticker's rarity color.
+        "dynamic": {"g_vColorTint": "return exists($sticker_rarity_color) ? $sticker_rarity_color : float3(1,1,1);"},
+    }
+    write_sticker_catalog()
 
     catalog = {
         "version": 1,
-        "generator": "cs.charm tools/generate_demo_charms.py",
-        "note": "Demo charms made from scratch, no game assets.",
+        "generator": "cs.charm tests/fixtures/generate_fixtures.py",
+        "note": "Test charms made from scratch, no game assets.",
         "charms": [
             {
                 "id": "demo_gem_drop", "name": "Demo Gem Drop", "collection": "cs.charm Demo",
@@ -375,6 +560,12 @@ def main():
                 "rarity": "ancient", "model": flask_model, "icon": flask_icon,
                 "slots": {"demo_chain": "demo/demo_chain.vmat", "demo_flask": "demo/demo_fuel_flask.vmat"},
                 "tags": ["demo", "liquid"],
+            },
+            {
+                "id": "demo_sticker_slab", "name": "Demo Sticker Slab", "collection": "cs.charm Demo",
+                "rarity": "common", "model": slab_model, "icon": slab_icon,
+                "slots": {"demo_chain": "demo/demo_chain.vmat", "demo_slab": "demo/demo_sticker_slab.vmat"},
+                "tags": ["demo", "slab", "sticker"],
             },
         ],
         "materials": materials,

@@ -10,13 +10,14 @@
     duplicates.py   duplicated charms get their own mesh, materials, physics
     charm_ops.py    spawn / edit operators
     library_ops.py  refresh, open folder, show in library
+    slab_ops.py     Sticker Slab: load stickers, put a sticker in a slab
 """
 
 import bpy
 
-from . import charm_ops, duplicates, interactive, library_ops
+from . import charm_ops, duplicates, interactive, library_ops, slab_ops
 
-_classes = (*library_ops.classes, *charm_ops.classes, *interactive.classes)
+_classes = (*library_ops.classes, *charm_ops.classes, *interactive.classes, *slab_ops.classes)
 
 
 def register():

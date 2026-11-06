@@ -46,7 +46,14 @@ def seed_params(dynamic):
     return sorted(name for name, text in dynamic.items() if uses_seed(text))
 
 
-def evaluate_dynamic(dynamic, pattern, only_seed=True):
+def _uses_any(expression, names):
+    try:
+        return bool(expr.variables_used(expression) & set(names))
+    except expr.ExprError:
+        return False
+
+
+def evaluate_dynamic(dynamic, pattern, only_seed=True, env=None):
     """Evaluate DynamicParams for a pattern.
 
     Returns ``(values, errors)``: ``values`` maps parameter names to floats
@@ -54,16 +61,20 @@ def evaluate_dynamic(dynamic, pattern, only_seed=True):
     not be evaluated (those keep their static value). With ``only_seed``
     expressions that do not depend on the pattern are skipped: they drive
     runtime effects (weapon shake, sloshing) and the static vmat value is
-    the better rest value.
+    the better rest value. ``env`` adds item inputs such as
+    ``$sticker_rarity_color`` (Sticker Slab); expressions that read one of
+    them are evaluated as well.
     """
-    env = dict(REST_ENV)
-    env[SEED_VAR] = seed_from_pattern(pattern)
+    extra = dict(env or {})
+    full_env = dict(REST_ENV)
+    full_env.update(extra)
+    full_env[SEED_VAR] = seed_from_pattern(pattern)
     values, errors = {}, {}
     for name, text in dynamic.items():
-        if only_seed and not uses_seed(text):
+        if only_seed and not uses_seed(text) and not (extra and _uses_any(text, extra)):
             continue
         try:
-            values[name] = expr.evaluate(text, env)
+            values[name] = expr.evaluate(text, full_env)
         except expr.ExprError as exc:
             errors[name] = str(exc)
     return values, errors

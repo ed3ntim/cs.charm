@@ -11,6 +11,7 @@ Node names inside each charm material:
     CHARM_MAIN        "CS2 Charm Weapon" or "CS2 Charm Liquid" group
     CHARM_DETAIL_UV   "CS2 Charm UV" group feeding the detail texture
     CHARM_GLITTER_UV  "CS2 Charm UV" group feeding the glitter normal map
+    CHARM_GLASS       "CS2 Charm Glass" group (F_OPAQUE_REFRACT, Sticker Slab)
 
 Valve does not document csgo_weapon.vfx / csgo_simple_liquid.vfx; the
 meaning of each parameter is inferred from names, defaults and the
@@ -99,6 +100,14 @@ LIQUID_BINDINGS = (
     Binding("g_vLiquidLevelDownwardsMinMidMax", NODE_MAIN, "Level Upside Down", KIND_RANGE),
 )
 
+# F_OPAQUE_REFRACT (Sticker Slab case): see-through rim, node NODE_GLASS.
+NODE_GLASS = "CHARM_GLASS"
+GLASS_BINDINGS = (
+    Binding("g_flRefractOpacity", NODE_GLASS, "Opacity"),
+    Binding("g_flRefractBrightness", NODE_GLASS, "Brightness"),
+    Binding("g_flRefractBlur", NODE_GLASS, "Blur"),
+)
+
 # Liquid inputs that describe the container geometry. Materials without
 # these parameters (demo and own liquids) get values from the mesh bounds.
 LIQUID_GEOMETRY_INPUTS = ("Liquid Center", "Level Upright", "Level Sideways", "Level Upside Down")
@@ -113,6 +122,7 @@ WEAPON_TEXTURES = {
     "g_tTintMask": ("TINT", "Non-Color"),
     "g_tDetail": ("DETAIL", "sRGB"),
     "g_tGlitterNormal": ("GLITTER", "Non-Color"),  # A = glitter mask
+    "g_tOpaqueRefractMask": ("REFRACT", "Non-Color"),  # R = see-through (F_OPAQUE_REFRACT)
 }
 LIQUID_TEXTURES = {
     "g_tColorA": ("COLOR", "sRGB"),          # A = opacity of the print
@@ -210,23 +220,27 @@ def _flag(params, name):
         return False
 
 
-def pattern_values(spec, pattern):
-    """Static params overlaid with the pattern's DynamicParams.
-    Returns (params, errors)."""
+def pattern_values(spec, pattern, env=None):
+    """Static params overlaid with the pattern's DynamicParams. ``env``
+    holds item inputs like ``$sticker_rarity_color``. Returns (params, errors)."""
     values = dict(spec.params)
-    dynamic, errors = patterns.evaluate_dynamic(spec.dynamic, pattern)
+    dynamic, errors = patterns.evaluate_dynamic(spec.dynamic, pattern, env=env)
     values.update(dynamic)
     return values, errors
 
 
-def node_values(spec, pattern=0):
+def node_values(spec, pattern=0, env=None):
     """{(node name, input name): value} for a material spec at a pattern.
     Parameters the spec does not set keep the node group defaults."""
-    params, _errors = pattern_values(spec, pattern)
+    params, _errors = pattern_values(spec, pattern, env)
     out = {}
     for b in bindings(spec.shader):
         if b.param in params:
             out[(b.node, b.input)] = _convert(params[b.param], b.kind)
+    if _flag(params, "F_OPAQUE_REFRACT"):
+        for b in GLASS_BINDINGS:
+            if b.param in params:
+                out[(b.node, b.input)] = _convert(params[b.param], b.kind)
     if not is_liquid(spec.shader):
         # Feature switches of csgo_weapon.vfx: disabled effects contribute nothing.
         if not _flag(params, "F_GLITTER"):
