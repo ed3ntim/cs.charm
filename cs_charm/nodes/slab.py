@@ -420,7 +420,7 @@ def _set_menu(node, socket, ui_value, prop, enum_value):
 
 
 def _label_font():
-    prefs = utils.get_prefs()
+    prefs = utils.prefs()
     path = bpy.path.abspath(prefs.label_font) if prefs is not None and prefs.label_font else ""
     if path and os.path.isfile(path):
         try:

@@ -28,7 +28,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 class SlabTestCase(CharmTestCase):
     def setUp(self):
         super().setUp()
-        prefs = utils.get_prefs()
+        prefs = utils.prefs()
         prefs.sticker_path = ""
         sticker_registry.invalidate()
         self.slab_charm = self.catalog.get("demo_sticker_slab")
@@ -235,7 +235,7 @@ class SlabSpawnTest(SlabTestCase):
     def test_works_without_library(self):
         """Wear, color and text come from the object, not the library."""
         obj, _ = self.spawn_slab(self.paper)
-        prefs = utils.get_prefs()
+        prefs = utils.prefs()
         prefs.sticker_path = os.path.join(ROOT, "does_not_exist")
         sticker_registry.invalidate()
         obj.cs_charm.label_text = ""
@@ -275,7 +275,9 @@ class SlabNodesTest(unittest.TestCase):
             inputs = {s.name for s in tree.interface.items_tree if getattr(s, "in_out", "") == "INPUT"}
             self.assertTrue({"Base Color", "Alpha", "Normal Color", "Wear", "Alpha Clip"} <= inputs, key)
             outputs = {s.name for s in tree.interface.items_tree if getattr(s, "in_out", "") == "OUTPUT"}
-            self.assertEqual(outputs, {"Shader"})
+            self.assertEqual(outputs, {"Shader", "Alpha"})
+            first = next(s for s in tree.interface.items_tree if getattr(s, "in_out", "") == "OUTPUT")
+            self.assertEqual(first.name, "Shader", "slab wires outputs[0]")
         wear = SG.ensure_group("WEAR")
         self.assertIn("Alpha", {s.name for s in wear.interface.items_tree if getattr(s, "in_out", "") == "OUTPUT"})
 

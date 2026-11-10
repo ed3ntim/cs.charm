@@ -9,7 +9,7 @@ Target: Blender 5.2, compatible back to 4.5.
 
 **For plugin excluding the charm assets (CS2 export required) [⬇ Download cs_charm.zip (latest release)](https://github.com/ed3ntim/cs.charm/releases/latest/download/cs_charm.zip)**
 
-**For the version including all charm assets visit my page [⬇ Download cs_charm-1.3.1 - all charms.zip](https://ed3n.gallery/apps/cs-charm/)**
+**For the version including all charm assets visit my page [⬇ Download cs_charm - all charms.zip](https://ed3n.gallery/apps/cs-charm/)**
 
 ## Installation
 
@@ -18,6 +18,11 @@ Target: Blender 5.2, compatible back to 4.5.
 2. Blender: *Edit > Preferences > Get Extensions > ⌄ > Install from Disk...*
    and pick the zip (drag & drop onto the Blender window works too).
 3. 3D Viewport sidebar (`N`), tab **cs.charm**.
+
+To remove the add-on: *Preferences > Add-ons > cs.charm > Uninstall
+cs.charm* (or Blender's own *⌄ > Uninstall* next to the extension).
+Charms already placed in your files stay as they are, your exported charm
+library is kept.
 
 The add-on ships without charms: export the CS2 charms from your own game
 installation (see [CS2 charms](#cs2-charms)) and set the folder as

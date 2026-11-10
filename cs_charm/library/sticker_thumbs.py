@@ -29,13 +29,7 @@ TEMP_IMAGE = "cs_charm_sticker_thumb"
 
 
 def cache_dir():
-    path = ""
-    getter = getattr(bpy.utils, "extension_path_user", None)
-    if getter is not None and utils.ADDON_ID.startswith("bl_ext."):
-        try:
-            path = getter(utils.ADDON_ID, path="sticker_thumbs", create=True)
-        except (ValueError, RuntimeError, OSError):
-            path = ""
+    path = utils.user_path("sticker_thumbs")
     if not path:
         path = os.path.join(tempfile.gettempdir(), "cs_charm_sticker_thumbs")
     os.makedirs(path, exist_ok=True)

@@ -10,6 +10,8 @@ import bpy
 # Package name as Blender sees it ("cs_charm" for legacy installs,
 # "bl_ext.<repo>.cs_charm" for extensions). Used as AddonPreferences id.
 ADDON_ID = __package__
+# Name of the module towards a host add-on (cs.blend), whatever the package path.
+MODULE_ID = "cs_charm"
 
 ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
 # Only present in personal builds (tools/build_zip.py --with-charms).
@@ -36,37 +38,80 @@ CHARM_COLLECTION_NAME = "CS Charms"
 log = logging.getLogger("cs_charm")
 
 
-def get_prefs():
-    """Return the add-on preferences or None (e.g. when run from tests)."""
+# Host add-on (cs.blend) when registered as its sub-module, else None.
+# The host provides settings(module_id) and user_path(module_id, sub, create).
+_host = None
+
+
+def set_host(host):
+    global _host
+    _host = host
+
+
+def get_host():
+    return _host
+
+
+def prefs():
+    """The settings (preferences.CSCHARM_PG_settings) or None, e.g. while
+    not registered. Standalone they hang off the add-on preferences, in host
+    mode the host keeps them."""
+    if _host is not None:
+        return _host.settings(MODULE_ID)
     addon = bpy.context.preferences.addons.get(ADDON_ID)
-    return addon.preferences if addon else None
+    return getattr(addon.preferences, "settings", None) if addon else None
+
+
+def user_path(sub="", create=True):
+    """Folder for the add-on's own user data (caches), or '' if there is
+    none (legacy install without host)."""
+    try:
+        if _host is not None:
+            return _host.user_path(MODULE_ID, sub, create=create) or ""
+        getter = getattr(bpy.utils, "extension_path_user", None)
+        if getter is not None and ADDON_ID.startswith("bl_ext."):
+            return getter(ADDON_ID, path=sub, create=create)
+    except (ValueError, RuntimeError, OSError):
+        pass
+    return ""
 
 
 def user_library_dir():
     """Absolute user library path from the preferences, or '' if unset/invalid."""
-    prefs = get_prefs()
-    if prefs is None or not prefs.user_path:
+    settings = prefs()
+    if settings is None or not settings.user_path:
         return ""
-    path = bpy.path.abspath(prefs.user_path)
+    path = bpy.path.abspath(settings.user_path)
     return path if os.path.isdir(path) else ""
+
+
+def _sticker_dirs_of(module, settings):
+    out = []
+    # cs.sticker keeps user_path on its preferences, or in a settings group
+    # (newer versions, host mode)
+    user = getattr(getattr(settings, "settings", settings), "user_path", "") if settings else ""
+    if user:
+        out.append(bpy.path.abspath(user))
+    root = os.path.dirname(os.path.abspath(module.__file__)) if module and module.__file__ else ""
+    if root:
+        out += [os.path.join(root, "stickers", "bundled"), os.path.join(root, "stickers", "core")]
+    return out
 
 
 def _sticker_addon_dirs():
     """Library folders of an installed cs.sticker: its user folder from the
-    preferences, then its core and bundled sets."""
+    preferences, then its bundled and core sets. Under a host also
+    cs.sticker as a sibling module of the same host."""
     import sys
     out = []
-    for key, addon in bpy.context.preferences.addons.items():
-        if key != "cs_sticker" and not key.endswith(".cs_sticker"):
-            continue
-        prefs = getattr(addon, "preferences", None)
-        user = getattr(prefs, "user_path", "") if prefs else ""
-        if user:
-            out.append(bpy.path.abspath(user))
-        module = sys.modules.get(key)
-        root = os.path.dirname(os.path.abspath(module.__file__)) if module and module.__file__ else ""
-        if root:
-            out += [os.path.join(root, "stickers", "bundled"), os.path.join(root, "stickers", "core")]
+    addons = bpy.context.preferences.addons
+    for key, addon in addons.items():
+        if key == "cs_sticker" or key.endswith(".cs_sticker"):
+            out += _sticker_dirs_of(sys.modules.get(key), getattr(addon, "preferences", None))
+    if _host is not None:
+        for key, module in list(sys.modules.items()):
+            if key.endswith(".cs_sticker") and key not in addons and hasattr(module, "__path__"):
+                out += _sticker_dirs_of(module, _host.settings("cs_sticker"))
     return out
 
 
@@ -74,8 +119,8 @@ def sticker_library_dirs():
     """Sticker library folders, most specific first: the folder from the
     preferences, or (empty) the folders of an installed cs.sticker, then
     CORE_STICKER_DIR (tests only)."""
-    prefs = get_prefs()
-    path = bpy.path.abspath(prefs.sticker_path) if prefs is not None and prefs.sticker_path else ""
+    settings = prefs()
+    path = bpy.path.abspath(settings.sticker_path) if settings is not None and settings.sticker_path else ""
     dirs = [path] if path else _sticker_addon_dirs()
     if CORE_STICKER_DIR:
         dirs.append(CORE_STICKER_DIR)

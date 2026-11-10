@@ -42,7 +42,7 @@ def refresh(context=None):
 
 
 def _filtered(state):
-    prefs = utils.get_prefs()
+    prefs = utils.prefs()
     include_incomplete = prefs.include_incomplete if prefs else True
     collection = "" if state.filter_collection == "ALL" else state.filter_collection
     rarity = "" if state.filter_rarity == "ALL" else state.filter_rarity
