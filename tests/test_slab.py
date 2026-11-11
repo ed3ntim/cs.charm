@@ -316,3 +316,47 @@ class SyncScriptTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MaskAndTintTest(SlabTestCase):
+    """cs.sticker #14: masks with 4/255 outside are still cut out.
+    cs.sticker #15: the catalog's Gold Tint (a list) reaches the group."""
+
+    def test_mask_background_and_gold_tint(self):
+        import tempfile
+        from cs_charm.library import sticker_thumbs
+        bg = 4.0 / 255.0
+        with tempfile.TemporaryDirectory() as d:
+            for name, fill in (("red", lambda x, y: (1.0, 0.0, 0.0, 1.0)),
+                               ("mask", lambda x, y: (0.8,) * 3 + (1.0,) if 4 <= x < 12 and 4 <= y < 12
+                                else (bg,) * 3 + (1.0,))):
+                img = bpy.data.images.new("stk", 16, 16, alpha=True)
+                img.pixels = [v for i in range(256) for v in fill(i % 16, i // 16)]
+                img.filepath_raw = os.path.join(d, f"{name}.png")
+                img.file_format = "PNG"
+                img.save()
+                bpy.data.images.remove(img)
+            sticker = ST.sticker_from_entry({
+                "id": "cs2_80_gold", "name": "Gold", "finish": "GOLD",
+                "textures": {"base": "red.png", "wearmask": "mask.png"},
+                "params": {"Gold Tint": [1.0, 0.9036, 0.49, 1.0], "Tint Amount": 1.0,
+                           "Tint Saturation": 0.04, "Note": "x"}}, d)
+            self.assertEqual(sticker.params["Gold Tint"], [1.0, 0.9036, 0.49, 1.0])
+            self.assertNotIn("Note", sticker.params)
+
+            obj, _ = self.spawn_slab(self.paper)
+            mat = self.slab_mat(obj)
+            slab.build_sticker_layer(mat, sticker)
+            nodes = mat.node_tree.nodes
+            shape = next(n for n in nodes if n.name.endswith("SHAPE"))
+            self.assertAlmostEqual(shape.inputs[2].default_value, -bg * ST.MASK_SHAPE_GAIN, places=2)
+            group = nodes[slab.NODE_STICKER]
+            self.assertAlmostEqual(group.inputs["Gold Tint"].default_value[1], 0.9036, places=4)
+            self.assertAlmostEqual(group.inputs["Tint Saturation"].default_value, 0.04, places=4)
+
+            px = sticker_thumbs.compose(sticker, 16)
+            self.assertLess(px[1, 1, 3], 0.01)
+            self.assertGreater(px[8, 8, 3], 0.99)
+            r, g, b = px[8, 8, :3]   # red base, gold tint: gold thumbnail
+            self.assertGreater(g / r, 0.6)
+            self.assertGreater(g, b)

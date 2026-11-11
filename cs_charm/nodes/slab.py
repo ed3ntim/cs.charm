@@ -148,6 +148,24 @@ def _image(path, data=False):
     return img
 
 
+MASK_FLOOR_KEY = "cs_charm_mask_floor"
+
+
+def image_mask_floor(img):
+    """ST.mask_floor of a loaded wear mask, cached on the image."""
+    if img is None or not img.size[0] or not img.size[1]:
+        return 0.0
+    if MASK_FLOOR_KEY in img:
+        return float(img[MASK_FLOOR_KEY])
+    import numpy as np
+    w, h = img.size
+    px = np.empty(w * h * img.channels, dtype=np.float32)
+    img.pixels.foreach_get(px)
+    floor = ST.mask_floor(px.reshape(h, w, img.channels)[..., 0])
+    img[MASK_FLOOR_KEY] = floor
+    return floor
+
+
 def _clear_layer(tree):
     for node in [n for n in tree.nodes if n.name.startswith(NODE_PREFIX)]:
         tree.nodes.remove(node)
@@ -248,9 +266,12 @@ def build_sticker_layer(mat, sticker, wear=0.0):
 
     wearmask = tex(ST.ROLE_WEARMASK, extension="CLIP")
     if wearmask is not None:
-        # CS2: the sticker shape is wear mask > ~0.8 % (as in cs.sticker).
-        shape = node("ShaderNodeMath", "SHAPE", -300, -1500, operation="MULTIPLY", use_clamp=True)
-        shape.inputs[1].default_value = 128.0
+        # CS2: the sticker shape is wear mask above its background (0, some
+        # masks 4/255) by ~0.4 % (as in cs.sticker).
+        shape = node("ShaderNodeMath", "SHAPE", -300, -1500, operation="MULTIPLY_ADD", use_clamp=True)
+        floor = image_mask_floor(wearmask.image)
+        shape.inputs[1].default_value = ST.MASK_SHAPE_GAIN
+        shape.inputs[2].default_value = -floor * ST.MASK_SHAPE_GAIN
         links.new(wearmask.outputs["Color"], shape.inputs[0])
         wire(shape.outputs[0], "Alpha", wear_node)
         wire(wearmask.outputs["Color"], "Wear Mask", wear_node)

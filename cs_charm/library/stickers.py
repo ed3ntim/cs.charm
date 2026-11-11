@@ -79,6 +79,33 @@ _KIT_ID = re.compile(r"^cs2_(\d+)_")
 _FINISH_SUFFIX = re.compile(r"\s*\(([^()]+)\)\s*$")
 
 
+# CS2 wear masks: 0 outside the shape, inside > 0. Some masks (Katowice
+# 2019, cs.sticker #14) have 4/255 outside. Shape = mask > floor + ~0.4 %.
+MASK_SHAPE_GAIN = 128.0
+MASK_FLOOR_MAX = 8.0 / 255.0
+
+
+def mask_floor(red):
+    """Background level of a wear mask (as in cs.sticker): median of the four
+    4x4 corners of the red channel (2D numpy array), 0 above MASK_FLOOR_MAX."""
+    import numpy as np
+    k = 4
+    corners = np.concatenate([red[:k, :k].ravel(), red[:k, -k:].ravel(),
+                              red[-k:, :k].ravel(), red[-k:, -k:].ravel()])
+    floor = float(np.median(corners)) if corners.size else 0.0
+    return floor if 0.0 < floor <= MASK_FLOOR_MAX else 0.0
+
+
+def _param(value):
+    """Catalog param usable as a group input: a number or a color (3-4 numbers)."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return True
+    return (isinstance(value, (list, tuple)) and len(value) in (3, 4)
+            and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value))
+
+
 def normalize_rarity(value):
     value = (value or "").strip().lower()
     return RARITY_ALIASES.get(value, value)
@@ -224,7 +251,8 @@ def sticker_from_entry(entry, base_dir, origin=""):
         event=event,
         kit_id=_int(entry.get("kit_id")) or kit_id_from(sticker_id),
         textures=textures,
-        params={k: v for k, v in (entry.get("params") or {}).items() if isinstance(v, (int, float))},
+        params={k: (list(v) if isinstance(v, (list, tuple)) else v)
+                for k, v in (entry.get("params") or {}).items() if _param(v)},
         tags=tags,
         origin=origin,
     )
