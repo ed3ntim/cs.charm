@@ -45,11 +45,19 @@ def _import_gltf(path):
     importer's materials per slot. Imported objects are removed again."""
     before_objs = set(bpy.data.objects)
     before_meshes = set(bpy.data.meshes)
-    result = bpy.ops.import_scene.gltf(filepath=path)
+    before_colls = set(bpy.data.collections)
+    # Skinned charms (joint1..3) get an Icosphere bone shape (1 m radius)
+    # from newer glTF importers; it must not end up in the charm mesh.
+    kwargs = {}
+    if "disable_bone_shape" in bpy.ops.import_scene.gltf.get_rna_type().properties:
+        kwargs["disable_bone_shape"] = True
+    result = bpy.ops.import_scene.gltf(filepath=path, **kwargs)
     if "FINISHED" not in result:
         raise RuntimeError(f"glTF import failed: {path}")
     new_objs = [o for o in bpy.data.objects if o not in before_objs]
-    meshes = [o for o in new_objs if o.type == "MESH" and o.data is not None]
+    shapes = {pb.custom_shape for o in new_objs if o.type == "ARMATURE" and o.pose
+              for pb in o.pose.bones if pb.custom_shape}
+    meshes = [o for o in new_objs if o.type == "MESH" and o.data is not None and o not in shapes]
     if not meshes:
         for o in new_objs:
             bpy.data.objects.remove(o, do_unlink=True)
@@ -87,6 +95,9 @@ def _import_gltf(path):
 
     for o in new_objs:
         bpy.data.objects.remove(o, do_unlink=True)
+    for coll in [c for c in bpy.data.collections if c not in before_colls]:
+        if not coll.all_objects:
+            bpy.data.collections.remove(coll)
     for mesh in [m for m in bpy.data.meshes if m not in before_meshes and m is not joined]:
         if mesh.users == 0:
             bpy.data.meshes.remove(mesh)
@@ -271,9 +282,11 @@ def rebuild_materials(obj):
     charm = charm_of(obj)
     if charm is None:
         raise RuntimeError("charm not found in the library")
-    old = [m for m in obj.data.materials]
+    old = [m.name for m in obj.data.materials if m is not None]
     warnings = setup_materials(obj, charm, obj.cs_charm.pattern)
-    for mat in old:
+    # By name: setup_materials may already have removed importer materials.
+    for name in old:
+        mat = bpy.data.materials.get(name)
         if mat is not None and mat.users == 0:
             bpy.data.materials.remove(mat)
     warnings += slab.rebuild(obj)

@@ -34,7 +34,7 @@ from .builder import GroupBuilder, principled, set_bsdf
 
 # Bump when group contents change; outdated groups are renamed (existing
 # materials keep working) and rebuilt.
-GROUP_VERSION = 3
+GROUP_VERSION = 4
 VERSION_KEY = "cs_charm_version"
 
 WEAPON_GROUP = "CS2 Charm Weapon"
@@ -271,10 +271,11 @@ def _build_liquid(tree):
     b.column(-1500)
     up_t = b.node("ShaderNodeVectorTransform", y=-300, vector_type="VECTOR",
                   convert_from="WORLD", convert_to="OBJECT")
-    up_t.inputs[0].default_value = (0.0, 0.0, 1.0)
+    # By name: Blender 5.3 added a "LightIndex" input in front of "Vector".
+    up_t.inputs["Vector"].default_value = (0.0, 0.0, 1.0)
     coords = b.node("ShaderNodeTexCoord", y=-600)
     b.column(-1300)
-    up = b.vmath("NORMALIZE", up_t.outputs[0], y=-300)
+    up = b.vmath("NORMALIZE", up_t.outputs["Vector"], y=-300)
     _ux, _uy, uz = b.separate(up, y=-100)
 
     # Level range for the current orientation: upright (uz = 1), on the
@@ -456,11 +457,21 @@ def ensure_group(key):
     tree = bpy.data.node_groups.get(name)
     if tree is not None and tree.get(VERSION_KEY) == GROUP_VERSION:
         return tree
-    if tree is not None:
-        tree.name = f"{name} (v{tree.get(VERSION_KEY, 0)})"
+    old = tree
+    if old is not None:
+        old.name = f"{name} (v{old.get(VERSION_KEY, 0)})"
     tree = bpy.data.node_groups.new(name, "ShaderNodeTree")
+    try:
+        build(tree)
+    except Exception:
+        # A half-built group must not count as current: drop it, so the
+        # next call builds again instead of using a broken group.
+        bpy.data.node_groups.remove(tree)
+        if old is not None:
+            old.name = name
+        raise
+    # Stamp only after a complete build.
     tree[VERSION_KEY] = GROUP_VERSION
-    build(tree)
     return tree
 
 

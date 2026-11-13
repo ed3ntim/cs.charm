@@ -88,6 +88,31 @@ class RegistrationTest(CharmTestCase):
         self.assertEqual([i.name for i in state.items], ["Demo Gem Drop"])
         state.filter_rarity = "ALL"
 
+    def test_liquid_group_complete(self):
+        # Blender 5.3 added a LightIndex input to Vector Transform; the
+        # liquid group must still build completely (cs.charm-dev#27).
+        tree = groups.ensure_group("LIQUID")
+        self.assertGreater(len(tree.nodes), 20)
+        self.assertGreater(len(tree.links), 20)
+
+    def test_failed_build_is_not_stamped(self):
+        name, build = groups._BUILDERS["LIQUID"]
+
+        def broken(tree):
+            raise RuntimeError("boom")
+
+        groups._BUILDERS["LIQUID"] = (name, broken)
+        try:
+            old = bpy.data.node_groups.get(name)
+            if old is not None:
+                bpy.data.node_groups.remove(old)
+            with self.assertRaises(RuntimeError):
+                groups.ensure_group("LIQUID")
+            self.assertIsNone(bpy.data.node_groups.get(name))
+        finally:
+            groups._BUILDERS["LIQUID"] = (name, build)
+        self.assertGreater(len(groups.ensure_group("LIQUID").nodes), 20)
+
     def test_node_groups(self):
         for tree in groups.ensure_all():
             self.assertEqual(tree.get(groups.VERSION_KEY), groups.GROUP_VERSION)
